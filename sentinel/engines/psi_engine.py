@@ -55,6 +55,9 @@ class PreSignalEngine:
         att_score, att_details = self._calc_attention_score(social_data or {}, news_data or [])
         fact_score, fact_details = self._calc_fact_score(news_data or [])
         
+        # 1b. 가격 충격 보너스 (급등/급락 시 PSI 직접 부스트)
+        price_boost, price_boost_details = self._calc_price_boost(price_data or {})
+        
         # 2. Confluence 보너스 (2개 이상 요소가 동시에 높을 때)
         high_count = sum(1 for s in [opt_score, att_score, fact_score] if s >= 5)
         confluence = CONFLUENCE_BONUS if high_count >= 2 else 0
@@ -62,12 +65,12 @@ class PreSignalEngine:
         # 3. Noise 패널티 (평시 노이즈 수준 보정)
         noise = self._calc_noise_penalty(att_score, fact_score)
         
-        # 4. 종합 점수
+        # 4. 종합 점수 (가격 충격은 직접 가산)
         psi = (
             SCORE_WEIGHTS["options"] * opt_score +
             SCORE_WEIGHTS["attention"] * att_score +
             SCORE_WEIGHTS["fact"] * fact_score +
-            confluence - noise
+            confluence + price_boost - noise
         )
         psi = max(0, min(10, round(psi, 1)))
         
@@ -79,13 +82,15 @@ class PreSignalEngine:
             "options": opt_details,
             "attention": att_details,
             "fact": fact_details,
+            "price_boost": price_boost_details,
             "confluence": {"bonus": confluence, "high_count": high_count},
             "noise": {"penalty": noise},
             "formula": (
                 f"{SCORE_WEIGHTS['options']}×{opt_score} + "
                 f"{SCORE_WEIGHTS['attention']}×{att_score} + "
                 f"{SCORE_WEIGHTS['fact']}×{fact_score} + "
-                f"{confluence} - {noise} = {psi}"
+                f"price_boost:{price_boost} + "
+                f"confluence:{confluence} - noise:{noise} = {psi}"
             ),
         }
         
@@ -292,6 +297,41 @@ class PreSignalEngine:
     # =========================================================
     # 보조 계산
     # =========================================================
+    def _calc_price_boost(self, price_data: Dict) -> Tuple[float, Dict]:
+        """
+        가격 충격 부스트: 큰 가격 변동 자체가 이상 신호
+        ±2% → +1.0, ±5% → +2.0, ±8% → +3.0, ±10%+ → +4.0
+        거래량 3x 이상 시 추가 +0.5
+        """
+        boost = 0.0
+        details = {"factors": []}
+        
+        if not price_data:
+            return 0.0, details
+        
+        # 가격 변동률
+        change_pct = abs(price_data.get("change_pct", 0))
+        if change_pct >= 10:
+            boost += 4.0
+            details["factors"].append(f"가격 변동 {price_data.get('change_pct', 0):+.1f}% → +4.0")
+        elif change_pct >= 8:
+            boost += 3.0
+            details["factors"].append(f"가격 변동 {price_data.get('change_pct', 0):+.1f}% → +3.0")
+        elif change_pct >= 5:
+            boost += 2.0
+            details["factors"].append(f"가격 변동 {price_data.get('change_pct', 0):+.1f}% → +2.0")
+        elif change_pct >= 2:
+            boost += 1.0
+            details["factors"].append(f"가격 변동 {price_data.get('change_pct', 0):+.1f}% → +1.0")
+        
+        # 거래량 급증
+        vol_ratio = price_data.get("volume_ratio", 1.0)
+        if vol_ratio >= 3:
+            boost += 0.5
+            details["factors"].append(f"거래량 {vol_ratio:.1f}x 평균 → +0.5")
+        
+        return min(4.5, boost), details
+    
     def _calc_noise_penalty(self, attention_score: float, fact_score: float) -> float:
         """Noise 패널티: 관심도만 높고 팩트가 없으면 차감"""
         if attention_score >= 5 and fact_score <= 2:
@@ -344,7 +384,7 @@ class FlashReasonEngine:
             })
         
         # 3. Noise / Fracture / Catalyst 분류
-        classification = self._classify_event(reason_candidates, news_data)
+        classification = self._classify_event(reason_candidates, news_data, price_data)
         
         # 4. 플레이북 결정
         playbook = self._get_playbook(classification)
@@ -415,8 +455,9 @@ class FlashReasonEngine:
         
         return "other"
     
-    def _classify_event(self, candidates: List[Dict], all_news: List[Dict]) -> Dict:
-        """Noise / Fracture / Catalyst 판정"""
+    def _classify_event(self, candidates: List[Dict], all_news: List[Dict],
+                        price_data: Dict = None) -> Dict:
+        """Noise / Fracture / Catalyst 판정 — 가격 방향 + 패턴 인식"""
         if not candidates:
             return {"type": "Unknown", "confidence": 0, "reasoning": "데이터 부족"}
         
@@ -429,30 +470,92 @@ class FlashReasonEngine:
         positive_count = sentiments.count('positive')
         negative_count = sentiments.count('negative')
         
-        # 부정적 키워드 체크
+        # 키워드 체크
         negative_found = False
         positive_found = False
+        all_text = ""
         for c in candidates:
             text = (c.get('title', '') + ' ' + c.get('summary', '')).lower()
+            all_text += text + " "
             if any(kw.lower() in text for kw in NEGATIVE_KEYWORDS):
                 negative_found = True
             if any(kw.lower() in text for kw in POSITIVE_KEYWORDS):
                 positive_found = True
         
-        # 판정 로직
+        # ── 가격 방향 신호 ──
+        price_direction = 0  # -1=하락, 0=중립, 1=상승
+        price_change = 0
+        if price_data:
+            price_change = price_data.get("change_pct", 0)
+            if price_change <= -2:
+                price_direction = -1
+            elif price_change >= 2:
+                price_direction = 1
+        
+        # ── 패턴 인식: Beat but Guide Down ──
+        beat_guide_down = False
+        guide_down_terms = ['guidance below', 'guide down', 'lowered guidance',
+                           'cut guidance', 'reduced outlook', 'below expectations',
+                           'disappointing guidance', 'weak guidance', 'outlook miss',
+                           'declines after', 'falls despite', 'drops despite',
+                           'despite beat', 'despite strong']
+        beat_terms = ['beat', 'topped', 'exceeded', 'surpassed', 'above estimate']
+        
+        has_beat = any(t in all_text for t in beat_terms)
+        has_guide_down = any(t in all_text for t in guide_down_terms)
+        
+        # 실적 beat + 하락 = beat but guide down 패턴
+        if has_beat and price_direction == -1:
+            beat_guide_down = True
+        if has_guide_down:
+            beat_guide_down = True
+        
+        # ── 판정 로직 (가격 방향 우선) ──
+        
+        # 1. Beat but Guide Down → Fracture (실적 좋아도 가이던스가 나쁘면 하락)
+        if beat_guide_down:
+            return {
+                "type": "Fracture",
+                "confidence": 0.9,
+                "reasoning": "실적 Beat에도 가이던스 하향/주가 하락 → Fracture"
+            }
+        
+        # 2. 강한 하락 + 뉴스 있음 → Fracture
+        if price_direction == -1 and (fact_sources >= 1 or len(all_news) >= 3):
+            conf = 0.85 if fact_sources >= 1 else 0.7
+            return {
+                "type": "Fracture",
+                "confidence": conf,
+                "reasoning": f"주가 {price_change:+.1f}% 하락 + 뉴스 {len(all_news)}건 → Fracture"
+            }
+        
+        # 3. 강한 상승 + 팩트 있음 → Catalyst
+        if price_direction == 1 and (fact_sources >= 1 or positive_found):
+            conf = 0.85 if fact_sources >= 1 else 0.7
+            return {
+                "type": "Catalyst",
+                "confidence": conf,
+                "reasoning": f"주가 {price_change:+.1f}% 상승 + 팩트/긍정 키워드 → Catalyst"
+            }
+        
+        # 4. 팩트 소스 + 부정 키워드 → Fracture
         if fact_sources >= 1 and negative_found and not positive_found:
             return {
                 "type": "Fracture",
                 "confidence": 0.8,
-                "reasoning": f"팩트 소스 {fact_sources}건 + 부정적 키워드 감지 → Fracture"
+                "reasoning": f"팩트 소스 {fact_sources}건 + 부정 키워드 → Fracture"
             }
-        elif fact_sources >= 1 and positive_found:
+        
+        # 5. 팩트 소스 + 긍정 키워드 → Catalyst
+        if fact_sources >= 1 and positive_found:
             return {
                 "type": "Catalyst",
                 "confidence": 0.85,
-                "reasoning": f"팩트 소스 {fact_sources}건 + 긍정적 키워드 감지 → Catalyst"
+                "reasoning": f"팩트 소스 {fact_sources}건 + 긍정 키워드 → Catalyst"
             }
-        elif positive_count > negative_count and len(all_news) >= 5:
+        
+        # 6. 뉴스 볼륨 + 센티멘트 방향
+        if positive_count > negative_count and len(all_news) >= 5:
             return {
                 "type": "Catalyst",
                 "confidence": 0.7,
@@ -464,12 +567,12 @@ class FlashReasonEngine:
                 "confidence": 0.65,
                 "reasoning": f"부정 뉴스 {negative_count} > 긍정 {positive_count} → Fracture"
             }
-        else:
-            return {
-                "type": "Noise",
-                "confidence": 0.5,
-                "reasoning": "팩트 근거 약함 + 방향성 불분명 → Noise"
-            }
+        
+        return {
+            "type": "Noise",
+            "confidence": 0.5,
+            "reasoning": "팩트 근거 약함 + 방향성 불분명 → Noise"
+        }
     
     def _get_playbook(self, classification: Dict) -> Dict:
         """분류에 따른 플레이북"""
