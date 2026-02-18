@@ -11,6 +11,26 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 MODEL = "gpt-4.1-mini"  # $0.40/M input, $1.60/M output — 뉴스 요약에 최적
 
 
+def _is_valid_article_url(url: str) -> bool:
+    """실제 기사 URL인지 검증 — 도메인만 있거나 API/RSS 링크 제외"""
+    if not url:
+        return False
+    # 차단 패턴
+    bad_patterns = [
+        'news.google.com/rss',
+        'finnhub.io/api',
+    ]
+    if any(p in url for p in bad_patterns):
+        return False
+    # 도메인만 있는 URL 제외 (경로가 / 하나이거나 없음)
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    path = parsed.path.strip('/')
+    if not path or len(path) < 3:
+        return False
+    return True
+
+
 def summarize_event(ticker: str, news_data: List[Dict], price_data: Dict = None) -> Dict:
     """
     뉴스 + 가격 데이터를 분석하여 한국어 이벤트 요약 생성
@@ -44,7 +64,7 @@ def summarize_event(ticker: str, news_data: List[Dict], price_data: Dict = None)
             news_text += f"    {summary}\n"
         news_text += f"    출처: {source} | 센티멘트: {sentiment}\n\n"
         
-        if url and 'news.google.com/rss' not in url:
+        if url and _is_valid_article_url(url):
             sources.append(url)
     
     # 가격 정보
