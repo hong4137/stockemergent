@@ -106,33 +106,48 @@ def format_telegram_alert(ticker: str, psi_result: Dict, flash_result: Dict) -> 
     classification = flash_result.get('classification', {})
     candidates = flash_result.get('reason_candidates', [])
     playbook = flash_result.get('playbook', {})
+    details = psi_result.get('details', {})
     
     cls_type = classification.get('type', 'Unknown')
     emoji_map = {"Noise": "⚠️", "Fracture": "🔴", "Catalyst": "🟢"}
     level_map = {"normal": "🟢", "watch": "🟡", "alert": "🟠", "critical": "🔴"}
     
-    msg = f"""
-{level_map.get(level, '❓')} *SENTINEL ALERT — {ticker}*
+    msg = f"""{level_map.get(level, '❓')} *SENTINEL — {ticker}*
 ━━━━━━━━━━━━━━━━━━━
 📊 *PSI: {psi:.1f}/10* [{level.upper()}]
-🏷️ *{emoji_map.get(cls_type, '❓')} {cls_type}* ({classification.get('confidence', 0):.0%})
+🏷️ *{emoji_map.get(cls_type, '❓')} {cls_type}* ({classification.get('confidence', 0):.0%})"""
+    
+    # 가격 변동 표시
+    price_boost_info = details.get('price_boost', {})
+    price_factors = price_boost_info.get('factors', [])
+    if price_factors:
+        msg += f"\n💰 *{price_factors[0].split('→')[0].strip()}*"
+    
+    msg += f"""
 
-*점수 구성:*
-  Options: {psi_result.get('options_score', 0):.1f} | Attention: {psi_result.get('attention_score', 0):.1f} | Fact: {psi_result.get('fact_score', 0):.1f}
-
-🔍 *원인 후보 Top-3:*"""
+*점수:*
+  O:{psi_result.get('options_score', 0):.0f} A:{psi_result.get('attention_score', 0):.0f} F:{psi_result.get('fact_score', 0):.0f}"""
+    
+    # Price boost가 있으면 표시
+    pb = sum(1 for f in price_factors)
+    if pb:
+        msg += f" +Price Boost"
+    
+    msg += f"\n\n🔍 *원인 Top-3:*"
     
     for c in candidates[:3]:
-        msg += f"\n  {c.get('rank', 0)}. [{c.get('event_type', '')}] {c.get('title', '')[:50]}"
-        if c.get('source_url'):
-            msg += f"\n     🔗 {c['source_url'][:60]}"
+        event_type = c.get('event_type', '')
+        title = c.get('title', '')[:50]
+        msg += f"\n  {c.get('rank', 0)}. [{event_type}] {title}"
+        if c.get('source_url') and 'news.google.com/rss' not in c.get('source_url', ''):
+            msg += f"\n     🔗 {c['source_url'][:80]}"
     
-    msg += f"\n\n📖 *Playbook: {playbook.get('id', 'N/A')}*"
+    msg += f"\n\n📖 *{playbook.get('id', 'N/A')}*"
     for action in playbook.get('actions', [])[:3]:
         msg += f"\n  ▸ {action}"
     
-    msg += f"\n\n⏰ 재평가: {playbook.get('reevaluation', 'N/A')}"
-    msg += f"\n🕐 {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}"
+    msg += f"\n\n⏰ {playbook.get('reevaluation', 'N/A')}"
+    msg += f" | {datetime.utcnow().strftime('%H:%M UTC')}"
     
     return msg.strip()
 
