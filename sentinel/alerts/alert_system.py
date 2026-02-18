@@ -181,7 +181,8 @@ def format_telegram_alert(ticker: str, psi_result: Dict, flash_result: Dict,
 def send_alert(ticker: str, psi_result: Dict, flash_result: Dict,
                trigger_type: str = "psi_critical",
                news_data: List[Dict] = None,
-               price_data: Dict = None) -> bool:
+               price_data: Dict = None,
+               force: bool = False) -> bool:
     """알림 생성 + AI 요약 + 발송"""
     classification = flash_result.get('classification', {})
     cls_type = classification.get('type', 'Unknown')
@@ -197,8 +198,8 @@ def send_alert(ticker: str, psi_result: Dict, flash_result: Dict,
     except Exception as e:
         print(f"  ⚠️ AI 요약 실패: {e}")
 
-    # 발송 여부 (AI 분류 기준)
-    if not should_send_alert(ticker, cls_type):
+    # 발송 여부 (force면 무조건 발송)
+    if not force and not should_send_alert(ticker, cls_type):
         return False
 
     # Telegram 발송
