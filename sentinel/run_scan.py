@@ -15,8 +15,8 @@ from engines.psi_engine import PreSignalEngine, FlashReasonEngine
 from alerts.alert_system import send_alert
 from alerts.telegram import send_telegram
 
-SCAN_TICKER = os.environ.get("SCAN_TICKER", "")
-FORCE_ALERT = os.environ.get("FORCE_ALERT", "false") == "true"
+SCAN_TICKER = os.environ.get("SCAN_TICKER", "").strip()
+FORCE_ALERT = os.environ.get("FORCE_ALERT", "false").lower() == "true"
 ET = timezone(timedelta(hours=-5))
 
 
@@ -90,6 +90,9 @@ def main():
     log(f"{'='*40}")
 
     tickers = [SCAN_TICKER] if SCAN_TICKER else [w.ticker for w in WATCHLIST]
+    log(f"🎯 스캔 대상: {tickers} (FORCE={FORCE_ALERT})")
+    if not tickers:
+        log("⚠️ 스캔할 종목이 없습니다! WATCHLIST 확인 필요")
     results = [scan_single(t) for t in tickers]
     results = [r for r in results if r]
 
