@@ -63,13 +63,15 @@ def scan_single(ticker):
         log(f"  🔍 {cls['type']} ({cls['confidence']:.0%})")
 
         if psi_result['psi_total'] >= 7 or FORCE_ALERT:
-            send_alert(ticker, psi_result, flash_result, "psi_critical")
+            send_alert(ticker, psi_result, flash_result, "psi_critical",
+                       news_data=all_news, price_data=price_data)
 
     # 가격 트리거
     pt = check_price_trigger(ticker)
     if pt and pt.get('triggered') and not flash_result:
         flash_result = FlashReasonEngine(ticker).analyze(all_news, price_data)
-        send_alert(ticker, psi_result, flash_result, "price_surge")
+        send_alert(ticker, psi_result, flash_result, "price_surge",
+                   news_data=all_news, price_data=price_data)
 
     return {
         "ticker": ticker,
