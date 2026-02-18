@@ -48,7 +48,7 @@ def collect_google_news(ticker: str, hours: int = 24) -> List[Dict]:
                     continue
                 
                 title = entry.get('title', '')
-                link = entry.get('link', '')
+                link = _resolve_google_news_url(entry)
                 summary = entry.get('summary', '')
                 
                 # 키워드 매칭
@@ -224,6 +224,41 @@ def collect_all_news(ticker: str) -> Dict:
 # ============================================================
 # 유틸리티
 # ============================================================
+
+def _resolve_google_news_url(entry) -> str:
+    """Google News RSS의 리다이렉트 URL을 실제 기사 URL로 변환"""
+    link = entry.get('link', '')
+    
+    # 1. summary/description에서 실제 URL 추출 시도
+    #    Google News RSS는 <a href="실제URL"> 형태를 summary에 포함하기도 함
+    summary = entry.get('summary', '') or entry.get('description', '')
+    if summary:
+        match = re.search(r'href="(https?://(?!news\.google\.com)[^"]+)"', summary)
+        if match:
+            return match.group(1)
+    
+    # 2. source URL이 있으면 사용
+    if hasattr(entry, 'source') and hasattr(entry.source, 'href'):
+        return entry.source.href
+    
+    # 3. Google News 리다이렉트 URL이면 HEAD 요청으로 실제 URL 추출
+    if 'news.google.com' in link:
+        try:
+            resp = requests.head(link, allow_redirects=True, timeout=5)
+            if resp.url and 'news.google.com' not in resp.url:
+                return resp.url
+        except:
+            pass
+        
+        # 4. HEAD 실패 시 GET으로 시도
+        try:
+            resp = requests.get(link, allow_redirects=True, timeout=5)
+            if resp.url and 'news.google.com' not in resp.url:
+                return resp.url
+        except:
+            pass
+    
+    return link
 
 def _simple_sentiment(text: str) -> str:
     """간단한 키워드 기반 센티멘트 판정"""
