@@ -64,7 +64,7 @@ def scan_single(ticker):
 
         if psi_result['psi_total'] >= 7 or FORCE_ALERT:
             send_alert(ticker, psi_result, flash_result, "psi_critical",
-                       news_data=all_news, price_data=price_data)
+                       news_data=all_news, price_data=price_data, force=FORCE_ALERT)
 
     # 가격 트리거
     pt = check_price_trigger(ticker)
