@@ -2,6 +2,24 @@
   "watchlist": [
     {
       "active": true,
+      "ticker": "MU",
+      "name": "Micron Technology",
+      "sector": "semiconductor",
+      "related": [
+        "SAMSUNG",
+        "SK HYNIX"
+      ],
+      "keywords": [
+        "MU",
+        "Micron Technology",
+        "memory",
+        "hbm4"
+      ],
+      "china_exposure": "low",
+      "notes": ""
+    },
+    {
+      "active": true,
       "ticker": "AMAT",
       "name": "Applied Materials",
       "sector": "Semiconductor Equipment",
@@ -30,7 +48,7 @@
         "CHIPS Act"
       ],
       "china_exposure": "high",
-      "notes": "WFE 1ì. AI/HBM ìí. BIS ìì¶ê·ì  ë¦¬ì¤í¬."
+      "notes": "WFE 1Ã¬ÂÂ. AI/HBM Ã¬ÂÂÃ­ÂÂ. BIS Ã¬ÂÂÃ¬Â¶ÂÃªÂ·ÂÃ¬Â Â Ã«Â¦Â¬Ã¬ÂÂ¤Ã­ÂÂ¬."
     },
     {
       "active": true,
@@ -59,10 +77,10 @@
         "inference"
       ],
       "china_exposure": "high",
-      "notes": "AI GPU ì§ë°°ì . ë°ì´í°ì¼í° ë§¤ì¶ íµì¬."
+      "notes": "AI GPU Ã¬Â§ÂÃ«Â°Â°Ã¬Â Â. Ã«ÂÂ°Ã¬ÂÂ´Ã­ÂÂ°Ã¬ÂÂ¼Ã­ÂÂ° Ã«Â§Â¤Ã¬Â¶Â Ã­ÂÂµÃ¬ÂÂ¬."
     },
     {
-      "active": true,
+      "active": false,
       "ticker": "ASML",
       "name": "ASML Holding",
       "sector": "Semiconductor Equipment",
@@ -83,10 +101,10 @@
         "Intel foundry"
       ],
       "china_exposure": "high",
-      "notes": "EUV ëì . ìì¶ê·ì  ì§ì  ìí¥."
+      "notes": "EUV Ã«ÂÂÃ¬Â Â. Ã¬ÂÂÃ¬Â¶ÂÃªÂ·ÂÃ¬Â Â Ã¬Â§ÂÃ¬Â Â Ã¬ÂÂÃ­ÂÂ¥."
     },
     {
-      "active": true,
+      "active": false,
       "ticker": "TSM",
       "name": "TSMC",
       "sector": "Semiconductor Foundry",
@@ -110,7 +128,7 @@
         "Japan fab"
       ],
       "china_exposure": "medium",
-      "notes": "íì´ëë¦¬ 1ì. CapExê° ì¥ë¹ì£¼ ì íì§í."
+      "notes": "Ã­ÂÂÃ¬ÂÂ´Ã«ÂÂÃ«Â¦Â¬ 1Ã¬ÂÂ. CapExÃªÂ°Â Ã¬ÂÂ¥Ã«Â¹ÂÃ¬Â£Â¼ Ã¬ÂÂ Ã­ÂÂÃ¬Â§ÂÃ­ÂÂ."
     },
     {
       "active": false,
@@ -134,7 +152,7 @@
         "Lisa Su"
       ],
       "china_exposure": "medium",
-      "notes": "NVDA ëì. AI ê°ìê¸° ìì¥ ì§ì."
+      "notes": "NVDA Ã«ÂÂÃ¬ÂÂ. AI ÃªÂ°ÂÃ¬ÂÂÃªÂ¸Â° Ã¬ÂÂÃ¬ÂÂ¥ Ã¬Â§ÂÃ¬ÂÂ."
     },
     {
       "active": false,
@@ -157,7 +175,7 @@
         "Hock Tan"
       ],
       "china_exposure": "low",
-      "notes": "ì»¤ì¤í AIì¹© + VMware. ë¤í¸ìí¹ ê°ì."
+      "notes": "Ã¬Â»Â¤Ã¬ÂÂ¤Ã­ÂÂ AIÃ¬Â¹Â© + VMware. Ã«ÂÂ¤Ã­ÂÂ¸Ã¬ÂÂÃ­ÂÂ¹ ÃªÂ°ÂÃ¬ÂÂ."
     },
     {
       "active": false,
@@ -178,21 +196,21 @@
         "rack scale"
       ],
       "china_exposure": "low",
-      "notes": "AI ìë² ì¡°ë¦½. NVDA GPU íì¬ ìë² ëíì£¼."
+      "notes": "AI Ã¬ÂÂÃ«Â²Â Ã¬Â¡Â°Ã«Â¦Â½. NVDA GPU Ã­ÂÂÃ¬ÂÂ¬ Ã¬ÂÂÃ«Â²Â Ã«ÂÂÃ­ÂÂÃ¬Â£Â¼."
     },
     {
       "active": true,
       "ticker": "PANW",
-      "name": "팔로알토 네트웍스",
-      "sector": "보안",
+      "name": "íë¡ìí  ë¤í¸ìì¤",
+      "sector": "ë³´ì",
       "related": [],
       "keywords": [
         "PANW",
-        "팔로알토 네트웍스",
+        "íë¡ìí  ë¤í¸ìì¤",
         "paloalto",
         "panw",
-        "팔로알토",
-        "보안"
+        "íë¡ìí ",
+        "ë³´ì"
       ],
       "china_exposure": "low",
       "notes": ""
