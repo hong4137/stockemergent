@@ -31,7 +31,8 @@ def collect_google_news(ticker: str, hours: int = 24) -> List[Dict]:
     queries = [ticker, watch.name]
     
     for query in queries:
-        url = f"https://news.google.com/rss/search?q={query}+stock&hl=en-US&gl=US&ceid=US:en"
+        safe_query = query.replace(" ", "+")
+        url = f"https://news.google.com/rss/search?q={safe_query}+stock&hl=en-US&gl=US&ceid=US:en"
         try:
             feed = feedparser.parse(url)
             cutoff = datetime.utcnow() - timedelta(hours=hours)
