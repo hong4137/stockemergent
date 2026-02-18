@@ -1,0 +1,77 @@
+{
+  "_설명": "Stock Sentinel 워치리스트. active를 true/false로 간편 등록/해제.",
+  "_업데이트": "GitHub에서 이 파일만 편집하면 다음 스캔부터 적용됩니다.",
+
+  "watchlist": [
+    {
+      "active": true,
+      "ticker": "AMAT",
+      "name": "Applied Materials",
+      "sector": "Semiconductor Equipment",
+      "related": ["ASML", "LRCX", "KLAC", "TSM", "INTC"],
+      "keywords": ["Applied Materials", "AMAT", "EUV", "High-NA", "GAA", "advanced packaging", "HBM", "CMP", "CVD", "etch", "ion implant", "WFE", "BIS", "export control", "CHIPS Act"],
+      "china_exposure": "high",
+      "notes": "WFE 1위. AI/HBM 수혜. BIS 수출규제 리스크."
+    },
+    {
+      "active": true,
+      "ticker": "NVDA",
+      "name": "NVIDIA",
+      "sector": "Semiconductor",
+      "related": ["AMD", "AVGO", "TSM", "SMCI", "MRVL"],
+      "keywords": ["NVIDIA", "NVDA", "GPU", "Blackwell", "Rubin", "data center", "AI chip", "CUDA", "HBM", "Jensen Huang", "hyperscaler", "inference"],
+      "china_exposure": "high",
+      "notes": "AI GPU 지배적. 데이터센터 매출 핵심."
+    },
+    {
+      "active": true,
+      "ticker": "ASML",
+      "name": "ASML Holding",
+      "sector": "Semiconductor Equipment",
+      "related": ["AMAT", "LRCX", "KLAC", "TSM"],
+      "keywords": ["ASML", "EUV", "High-NA", "lithography", "DUV", "TSMC", "Samsung foundry", "Intel foundry"],
+      "china_exposure": "high",
+      "notes": "EUV 독점. 수출규제 직접 영향."
+    },
+    {
+      "active": true,
+      "ticker": "TSM",
+      "name": "TSMC",
+      "sector": "Semiconductor Foundry",
+      "related": ["AMAT", "ASML", "NVDA", "AAPL"],
+      "keywords": ["TSMC", "TSM", "foundry", "N2", "N3", "A16", "advanced packaging", "CoWoS", "capex", "Arizona fab", "Japan fab"],
+      "china_exposure": "medium",
+      "notes": "파운드리 1위. CapEx가 장비주 선행지표."
+    },
+    {
+      "active": false,
+      "ticker": "AMD",
+      "name": "Advanced Micro Devices",
+      "sector": "Semiconductor",
+      "related": ["NVDA", "INTC", "TSM", "XLNX"],
+      "keywords": ["AMD", "EPYC", "Ryzen", "MI300", "MI400", "data center", "AI accelerator", "Lisa Su"],
+      "china_exposure": "medium",
+      "notes": "NVDA 대안. AI 가속기 시장 진입."
+    },
+    {
+      "active": false,
+      "ticker": "AVGO",
+      "name": "Broadcom",
+      "sector": "Semiconductor",
+      "related": ["NVDA", "MRVL", "QCOM"],
+      "keywords": ["Broadcom", "AVGO", "custom silicon", "ASIC", "VMware", "networking", "AI networking", "Hock Tan"],
+      "china_exposure": "low",
+      "notes": "커스텀 AI칩 + VMware. 네트워킹 강자."
+    },
+    {
+      "active": false,
+      "ticker": "SMCI",
+      "name": "Super Micro Computer",
+      "sector": "IT Infrastructure",
+      "related": ["NVDA", "DELL", "HPE"],
+      "keywords": ["Super Micro", "SMCI", "AI server", "GPU server", "liquid cooling", "rack scale"],
+      "china_exposure": "low",
+      "notes": "AI 서버 조립. NVDA GPU 탑재 서버 대표주."
+    }
+  ]
+}
