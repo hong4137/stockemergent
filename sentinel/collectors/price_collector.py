@@ -47,10 +47,26 @@ def collect_price_yfinance(ticker: str) -> Optional[Dict]:
         
         latest = results[-1] if results else None
         print(f"  💰 Price [{ticker}]: ${latest['close']:.2f} | Vol: {latest['volume']:,}")
+        
+        # 가격 변동률 계산
+        change_pct = 0.0
+        volume_ratio = 1.0
+        if len(results) >= 2:
+            prev_close = results[-2]['close']
+            if prev_close > 0:
+                change_pct = ((latest['close'] - prev_close) / prev_close) * 100
+            # 평균 거래량 대비 비율
+            avg_vol = sum(r['volume'] for r in results[:-1]) / len(results[:-1])
+            if avg_vol > 0:
+                volume_ratio = latest['volume'] / avg_vol
+            print(f"  📈 Change: {change_pct:+.1f}% | Volume: {volume_ratio:.1f}x avg")
+        
         return {
             "ticker": ticker,
             "latest": latest,
             "history": results,
+            "change_pct": round(change_pct, 2),
+            "volume_ratio": round(volume_ratio, 2),
             "source": "yfinance",
         }
     
