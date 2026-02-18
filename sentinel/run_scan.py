@@ -1,8 +1,10 @@
 """
-Stock Sentinel — GitHub Actions 엔트리포인트
+Stock Sentinel — GitHub Actions 엔트리포인트 v2
+각 종목 독립 실행 + 진단 로그
 """
 import os
 import sys
+import traceback
 from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -27,6 +29,7 @@ def log(msg):
 def scan_single(ticker):
     watch = WATCHMAP.get(ticker)
     if not watch:
+        log(f"❌ {ticker} not in WATCHMAP")
         return {}
 
     log(f"📡 {ticker} ({watch.name})")
@@ -91,15 +94,40 @@ def main():
 
     tickers = [SCAN_TICKER] if SCAN_TICKER else [w.ticker for w in WATCHLIST]
     log(f"🎯 스캔 대상: {tickers} (FORCE={FORCE_ALERT})")
+
     if not tickers:
         log("⚠️ 스캔할 종목이 없습니다! WATCHLIST 확인 필요")
-    results = [scan_single(t) for t in tickers]
-    results = [r for r in results if r]
+        return
 
+    results = []
+    errors = []
+
+    for t in tickers:
+        try:
+            r = scan_single(t)
+            if r:
+                results.append(r)
+        except Exception as e:
+            err_msg = f"❌ {t} 스캔 실패: {e}"
+            log(err_msg)
+            log(traceback.format_exc())
+            errors.append(err_msg)
+
+    # SUMMARY
     log(f"\n📊 SUMMARY")
     for r in results:
         e = {"normal": "🟢", "watch": "🟡", "alert": "🟠", "critical": "🔴"}.get(r['level'], "❓")
         log(f"  {e} {r['ticker']:6s} PSI {r['psi']:4.1f} → {r['cls']} ({r['news']}건)")
+
+    if errors:
+        log(f"\n⚠️ ERRORS: {len(errors)}")
+        for err in errors:
+            log(f"  {err}")
+        # 에러도 텔레그램으로 알림
+        err_msg = f"⚠️ *Sentinel 오류*\n"
+        for err in errors:
+            err_msg += f"  {err}\n"
+        send_telegram(err_msg)
 
     # 장마감 일일요약
     if now.hour == 16 and now.minute < 35:

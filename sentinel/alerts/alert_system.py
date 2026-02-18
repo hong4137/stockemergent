@@ -16,6 +16,7 @@ from config.settings import (
 from storage.database import (
     save_alert, get_last_alert_time, count_noise_alerts_today
 )
+from alerts.telegram import sanitize_title
 
 
 # ── 한글 매핑 ──
@@ -206,6 +207,10 @@ def format_telegram_alert(ticker: str, psi_result: Dict, flash_result: Dict,
     cls_emoji = CLS_EMOJI.get(cls_type, "❓")
     playbook = PLAYBOOKS.get(cls_type, PLAYBOOKS["Noise"])
 
+    # Sanitize 동적 텍스트 (Markdown 깨짐 방지)
+    headline = sanitize_title(headline)
+    detail_text = sanitize_title(detail_text)
+
     # 가격 변동
     price_line = ""
     pf = details.get("price_boost", {}).get("factors", [])
@@ -233,7 +238,7 @@ def format_telegram_alert(ticker: str, psi_result: Dict, flash_result: Dict,
             rank = c.get("rank", "?")
             etype = c.get("event_type", "other")
             etype_kr = EVENT_TYPE_KR.get(etype, etype)
-            title = c.get("title", "")[:55]
+            title = sanitize_title(c.get("title", ""))[:55]
             source_url = c.get("source_url", "")
             source_field = c.get("source", "")
             source_name = _extract_source_name(source_url, source_field)
