@@ -6,880 +6,207 @@
 <title>📡 Sentinel — Watchlist</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap');
-
-:root {
-  --bg: #0c0f16;
-  --surface: #141821;
-  --surface2: #1a1f2e;
-  --surface3: #222838;
-  --border: #2a3144;
-  --border-active: #3b82f6;
-  --text: #e8ecf4;
-  --text2: #8b95a8;
-  --text3: #5c6478;
-  --blue: #3b82f6;
-  --green: #22c55e;
-  --green-dim: rgba(34,197,94,0.12);
-  --red: #ef4444;
-  --red-dim: rgba(239,68,68,0.1);
-  --amber: #f59e0b;
-  --purple: #8b5cf6;
-  --cyan: #06b6d4;
-}
-
-* { margin: 0; padding: 0; box-sizing: border-box; }
-
-body {
-  background: var(--bg);
-  color: var(--text);
-  font-family: 'DM Sans', sans-serif;
-  min-height: 100vh;
-}
-
-/* Header */
-.header {
-  padding: 28px 24px 20px;
-  border-bottom: 1px solid var(--border);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  max-width: 800px;
-  margin: 0 auto;
-}
-
-.header-left { display: flex; align-items: center; gap: 12px; }
-.header-left h1 { font-size: 20px; font-weight: 700; letter-spacing: -0.5px; }
-.header-left .dot {
-  width: 8px; height: 8px; border-radius: 50%;
-  background: var(--green);
-  box-shadow: 0 0 8px rgba(34,197,94,0.5);
-  animation: pulse 2s ease infinite;
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
-}
-
-.header-right { display: flex; gap: 8px; }
-
-.badge {
-  padding: 4px 10px;
-  border-radius: 6px;
-  font-size: 12px;
-  font-weight: 600;
-  font-family: 'DM Mono';
-}
-
-.badge-active { background: var(--green-dim); color: var(--green); }
-.badge-total { background: var(--surface2); color: var(--text2); }
-
-/* Toolbar */
-.toolbar {
-  max-width: 800px;
-  margin: 16px auto;
-  padding: 0 24px;
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.search-box {
-  flex: 1;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 10px 14px;
-  color: var(--text);
-  font-size: 14px;
-  font-family: 'DM Sans';
-  outline: none;
-  transition: border-color 0.2s;
-}
-
-.search-box:focus { border-color: var(--blue); }
-.search-box::placeholder { color: var(--text3); }
-
-.btn {
-  padding: 10px 16px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 600;
-  font-family: 'DM Sans';
-  cursor: pointer;
-  transition: all 0.2s;
-  white-space: nowrap;
-}
-
-.btn:hover { background: var(--surface2); border-color: var(--text3); }
-.btn-primary { background: var(--blue); border-color: var(--blue); color: #fff; }
-.btn-primary:hover { background: #2563eb; }
-.btn-save { background: var(--green); border-color: var(--green); color: #fff; }
-.btn-save:hover { background: #16a34a; }
-.btn-save:disabled { opacity: 0.4; cursor: not-allowed; }
-
-/* Card List */
-.list {
-  max-width: 800px;
-  margin: 0 auto;
-  padding: 8px 24px 100px;
-}
-
-.card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  margin-bottom: 8px;
-  overflow: hidden;
-  transition: all 0.2s;
-}
-
-.card:hover { border-color: var(--text3); }
-.card.inactive { opacity: 0.45; }
-.card.inactive:hover { opacity: 0.65; }
-
-.card-main {
-  display: flex;
-  align-items: center;
-  padding: 16px 18px;
-  gap: 14px;
-  cursor: pointer;
-  user-select: none;
-}
-
-/* Toggle Switch */
-.toggle {
-  position: relative;
-  width: 44px;
-  height: 24px;
-  flex-shrink: 0;
-}
-
-.toggle input { display: none; }
-
-.toggle-track {
-  position: absolute;
-  inset: 0;
-  background: var(--surface3);
-  border-radius: 12px;
-  cursor: pointer;
-  transition: background 0.25s;
-}
-
-.toggle input:checked + .toggle-track { background: var(--green); }
-
-.toggle-thumb {
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 18px;
-  height: 18px;
-  background: #fff;
-  border-radius: 50%;
-  transition: transform 0.25s;
-  pointer-events: none;
-}
-
-.toggle input:checked ~ .toggle-thumb { transform: translateX(20px); }
-
-/* Card Content */
-.card-info { flex: 1; min-width: 0; }
-
-.card-top {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 3px;
-}
-
-.ticker {
-  font-family: 'DM Mono';
-  font-size: 16px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
-}
-
-.name { font-size: 13px; color: var(--text2); }
-
-.card-bottom {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.tag {
-  padding: 2px 7px;
-  border-radius: 4px;
-  font-size: 10px;
-  font-weight: 600;
-  background: var(--surface3);
-  color: var(--text3);
-}
-
-.tag-sector { background: rgba(59,130,246,0.1); color: var(--blue); }
-.tag-china-high { background: var(--red-dim); color: var(--red); }
-.tag-china-medium { background: rgba(245,158,11,0.1); color: var(--amber); }
-
-.expand-btn {
-  background: none;
-  border: none;
-  color: var(--text3);
-  font-size: 18px;
-  cursor: pointer;
-  padding: 4px;
-  transition: all 0.2s;
-  flex-shrink: 0;
-}
-
-.expand-btn:hover { color: var(--text2); }
-.expand-btn.open { transform: rotate(180deg); }
-
-/* Expanded Detail */
-.card-detail {
-  display: none;
-  padding: 0 18px 16px;
-  border-top: 1px solid var(--border);
-  margin-top: 0;
-}
-
-.card-detail.show { display: block; padding-top: 14px; }
-
-.detail-section {
-  margin-bottom: 12px;
-}
-
-.detail-label {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text3);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: 6px;
-}
-
-.detail-keywords {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.kw-tag {
-  padding: 3px 8px;
-  border-radius: 5px;
-  font-size: 11px;
-  background: var(--surface3);
-  color: var(--text2);
-}
-
-.detail-related {
-  display: flex;
-  gap: 6px;
-}
-
-.rel-tag {
-  padding: 3px 8px;
-  border-radius: 5px;
-  font-size: 12px;
-  font-family: 'DM Mono';
-  font-weight: 500;
-  background: rgba(139,92,246,0.1);
-  color: var(--purple);
-}
-
-.detail-notes {
-  font-size: 12px;
-  color: var(--text2);
-  line-height: 1.5;
-}
-
-/* Add Form */
-.add-section {
-  max-width: 800px;
-  margin: 0 auto;
-  padding: 0 24px;
-}
-
-.add-form {
-  display: none;
-  background: var(--surface);
-  border: 1px dashed var(--border-active);
-  border-radius: 14px;
-  padding: 20px;
-  margin-bottom: 16px;
-}
-
-.add-form.show { display: block; }
-
-.form-row {
-  display: flex;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-
-.form-input {
-  flex: 1;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 9px 12px;
-  color: var(--text);
-  font-size: 13px;
-  font-family: 'DM Sans';
-  outline: none;
-}
-
-.form-input:focus { border-color: var(--blue); }
-.form-input::placeholder { color: var(--text3); }
-
-.form-input-sm { max-width: 100px; }
-.form-input-ticker { max-width: 80px; font-family: 'DM Mono'; text-transform: uppercase; }
-
-/* Floating Save Bar */
-.save-bar {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  background: var(--surface);
-  border-top: 1px solid var(--border);
-  padding: 14px 24px;
-  display: none;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  z-index: 100;
-  backdrop-filter: blur(12px);
-}
-
-.save-bar.show { display: flex; }
-.save-bar .change-count { font-size: 13px; color: var(--amber); font-weight: 600; }
-
-/* Toast */
-.toast {
-  position: fixed;
-  top: 20px;
-  right: 20px;
-  padding: 14px 20px;
-  border-radius: 10px;
-  font-size: 13px;
-  font-weight: 600;
-  z-index: 200;
-  transform: translateX(120%);
-  transition: transform 0.3s ease;
-}
-
-.toast.show { transform: translateX(0); }
-.toast-success { background: var(--green); color: #fff; }
-.toast-error { background: var(--red); color: #fff; }
-
-/* Setup overlay */
-.setup-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.7);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 300;
-  backdrop-filter: blur(4px);
-}
-
-.setup-box {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 32px;
-  max-width: 420px;
-  width: 90%;
-}
-
-.setup-box h2 { font-size: 18px; margin-bottom: 8px; }
-.setup-box p { font-size: 13px; color: var(--text2); margin-bottom: 16px; line-height: 1.6; }
-
-.setup-box .form-input { width: 100%; margin-bottom: 12px; }
-
-@media (max-width: 640px) {
-  .header { padding: 20px 16px 16px; }
-  .toolbar, .list, .add-section { padding-left: 16px; padding-right: 16px; }
-  .card-main { padding: 14px; }
-  .form-row { flex-direction: column; }
-  .form-input-sm, .form-input-ticker { max-width: 100%; }
-}
+:root{--bg:#0c0f16;--surface:#141821;--surface2:#1a1f2e;--surface3:#222838;--border:#2a3144;--border-active:#3b82f6;--text:#e8ecf4;--text2:#8b95a8;--text3:#5c6478;--blue:#3b82f6;--green:#22c55e;--green-dim:rgba(34,197,94,.12);--red:#ef4444;--red-dim:rgba(239,68,68,.1);--amber:#f59e0b;--purple:#8b5cf6}
+*{margin:0;padding:0;box-sizing:border-box}body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min-height:100vh}
+.header{padding:28px 24px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;max-width:800px;margin:0 auto}
+.header-left{display:flex;align-items:center;gap:12px}.header-left h1{font-size:20px;font-weight:700;letter-spacing:-.5px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 8px rgba(34,197,94,.5);animation:pulse 2s ease infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+.header-right{display:flex;gap:8px}.badge{padding:4px 10px;border-radius:6px;font-size:12px;font-weight:600;font-family:'DM Mono'}
+.badge-active{background:var(--green-dim);color:var(--green)}.badge-total{background:var(--surface2);color:var(--text2)}
+.toolbar{max-width:800px;margin:16px auto;padding:0 24px;display:flex;gap:8px;align-items:center}
+.search-box{flex:1;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px 14px;color:var(--text);font-size:14px;font-family:'DM Sans';outline:none;transition:border-color .2s}
+.search-box:focus{border-color:var(--blue)}.search-box::placeholder{color:var(--text3)}
+.btn{padding:10px 16px;border-radius:10px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:13px;font-weight:600;font-family:'DM Sans';cursor:pointer;transition:all .2s;white-space:nowrap}
+.btn:hover{background:var(--surface2);border-color:var(--text3)}.btn-primary{background:var(--blue);border-color:var(--blue);color:#fff}.btn-primary:hover{background:#2563eb}
+.btn-save{background:var(--green);border-color:var(--green);color:#fff}.btn-save:hover{background:#16a34a}.btn-save:disabled{opacity:.4;cursor:not-allowed}
+.list{max-width:800px;margin:0 auto;padding:8px 24px 100px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:14px;margin-bottom:8px;overflow:hidden;transition:all .2s}
+.card:hover{border-color:var(--text3)}.card.inactive{opacity:.45}.card.inactive:hover{opacity:.65}
+.card-main{display:flex;align-items:center;padding:16px 18px;gap:14px}
+.toggle{position:relative;width:44px;height:24px;flex-shrink:0;cursor:pointer}
+.toggle-track{position:absolute;inset:0;background:var(--surface3);border-radius:12px;transition:background .25s}
+.toggle.on .toggle-track{background:var(--green)}
+.toggle-thumb{position:absolute;top:3px;left:3px;width:18px;height:18px;background:#fff;border-radius:50%;transition:transform .25s;pointer-events:none}
+.toggle.on .toggle-thumb{transform:translateX(20px)}
+.card-info{flex:1;min-width:0;cursor:pointer}.card-top{display:flex;align-items:center;gap:8px;margin-bottom:3px}
+.ticker{font-family:'DM Mono';font-size:16px;font-weight:700;letter-spacing:.5px}.name{font-size:13px;color:var(--text2)}
+.card-bottom{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.tag{padding:2px 7px;border-radius:4px;font-size:10px;font-weight:600;background:var(--surface3);color:var(--text3)}
+.tag-sector{background:rgba(59,130,246,.1);color:var(--blue)}.tag-china-high{background:var(--red-dim);color:var(--red)}.tag-china-medium{background:rgba(245,158,11,.1);color:var(--amber)}
+.expand-btn{background:none;border:none;color:var(--text3);font-size:18px;cursor:pointer;padding:4px;transition:all .2s;flex-shrink:0}
+.expand-btn:hover{color:var(--text2)}.expand-btn.open{transform:rotate(180deg)}
+.card-detail{display:none;padding:0 18px 16px;border-top:1px solid var(--border)}.card-detail.show{display:block;padding-top:14px}
+.detail-section{margin-bottom:12px}.detail-label{font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
+.detail-keywords{display:flex;flex-wrap:wrap;gap:4px}.kw-tag{padding:3px 8px;border-radius:5px;font-size:11px;background:var(--surface3);color:var(--text2)}
+.detail-related{display:flex;gap:6px;flex-wrap:wrap}.rel-tag{padding:3px 8px;border-radius:5px;font-size:12px;font-family:'DM Mono';font-weight:500;background:rgba(139,92,246,.1);color:var(--purple)}
+.detail-notes{font-size:12px;color:var(--text2);line-height:1.5}
+.add-section{max-width:800px;margin:0 auto;padding:0 24px}
+.add-form{display:none;background:var(--surface);border:1px dashed var(--border-active);border-radius:14px;padding:20px;margin-bottom:16px}.add-form.show{display:block}
+.form-row{display:flex;gap:10px;margin-bottom:10px}
+.form-input{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:9px 12px;color:var(--text);font-size:13px;font-family:'DM Sans';outline:none}
+.form-input:focus{border-color:var(--blue)}.form-input::placeholder{color:var(--text3)}.form-input-ticker{max-width:100px;font-family:'DM Mono';text-transform:uppercase}
+.form-hint{font-size:11px;color:var(--text3);margin-bottom:12px;line-height:1.5;padding:0 2px}
+.save-bar{position:fixed;bottom:0;left:0;right:0;background:var(--surface);border-top:1px solid var(--border);padding:14px 24px;display:none;align-items:center;justify-content:center;gap:12px;z-index:100;backdrop-filter:blur(12px)}
+.save-bar.show{display:flex}.save-bar .change-count{font-size:13px;color:var(--amber);font-weight:600}
+.toast{position:fixed;top:20px;right:20px;padding:14px 20px;border-radius:10px;font-size:13px;font-weight:600;z-index:200;transform:translateX(120%);transition:transform .3s ease}
+.toast.show{transform:translateX(0)}.toast-success{background:var(--green);color:#fff}.toast-error{background:var(--red);color:#fff}
+.setup-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;z-index:300;backdrop-filter:blur(4px)}
+.setup-box{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:32px;max-width:420px;width:90%}
+.setup-box h2{font-size:18px;margin-bottom:8px}.setup-box p{font-size:13px;color:var(--text2);margin-bottom:16px;line-height:1.6}
+.setup-box .form-input{width:100%;margin-bottom:12px}
+@media(max-width:640px){.header{padding:20px 16px 16px}.toolbar,.list,.add-section{padding-left:16px;padding-right:16px}.card-main{padding:14px;gap:10px}.form-row{flex-direction:column}.form-input-ticker{max-width:100%}}
 </style>
 </head>
 <body>
-
-<!-- Setup Overlay (첫 사용 시) -->
 <div class="setup-overlay" id="setupOverlay" style="display:none">
   <div class="setup-box">
     <h2>🔐 GitHub 연결</h2>
-    <p>워치리스트 변경사항을 레포에 저장하려면 GitHub Personal Access Token이 필요합니다.
-       <br>레포 Settings → Contents 권한만 있으면 됩니다.</p>
-    <input class="form-input" id="setupToken" type="password" placeholder="ghp_xxxx... (GitHub PAT)">
-    <input class="form-input" id="setupRepo" type="text" placeholder="hong4137/stockemergent" value="hong4137/stockemergent">
-    <div style="display:flex; gap:8px; margin-top:4px;">
+    <p>종목 변경사항을 레포에 자동 저장합니다.<br>GitHub → Settings → Developer settings → Fine-grained token 발급.<br><strong>Contents (Read/Write)</strong> 권한만 필요.</p>
+    <input class="form-input" id="setupToken" type="password" placeholder="github_pat_xxxx... (토큰 붙여넣기)">
+    <input class="form-input" id="setupRepo" type="text" value="hong4137/stockemergent">
+    <div style="display:flex;gap:8px;margin-top:4px">
       <button class="btn btn-primary" style="flex:1" onclick="saveSetup()">연결</button>
       <button class="btn" onclick="skipSetup()">나중에</button>
     </div>
   </div>
 </div>
-
-<!-- Toast -->
 <div class="toast" id="toast"></div>
-
-<!-- Header -->
 <div class="header">
-  <div class="header-left">
-    <div class="dot"></div>
-    <h1>Sentinel Watchlist</h1>
-  </div>
+  <div class="header-left"><div class="dot"></div><h1>Sentinel Watchlist</h1></div>
   <div class="header-right">
-    <span class="badge badge-active" id="activeCount">0 active</span>
-    <span class="badge badge-total" id="totalCount">0 total</span>
+    <span class="badge badge-active" id="activeCount">0 감시중</span>
+    <span class="badge badge-total" id="totalCount">0 전체</span>
   </div>
 </div>
-
-<!-- Toolbar -->
 <div class="toolbar">
   <input class="search-box" id="searchBox" type="text" placeholder="종목 검색...">
-  <button class="btn" id="addBtn" onclick="toggleAddForm()">+ 추가</button>
+  <button class="btn" onclick="toggleAddForm()">+ 추가</button>
 </div>
-
-<!-- Add Form -->
 <div class="add-section">
   <div class="add-form" id="addForm">
+    <div class="form-hint">💡 <strong>티커와 회사명만 입력하면 됩니다.</strong> 나머지는 선택사항.</div>
     <div class="form-row">
-      <input class="form-input form-input-ticker" id="newTicker" placeholder="NVDA">
-      <input class="form-input" id="newName" placeholder="회사명 (예: NVIDIA)">
-      <input class="form-input" id="newSector" placeholder="섹터">
+      <input class="form-input form-input-ticker" id="newTicker" placeholder="티커 (NVDA)">
+      <input class="form-input" id="newName" placeholder="회사명 (NVIDIA)">
     </div>
+    <details style="margin-bottom:12px">
+      <summary style="font-size:12px;color:var(--text3);cursor:pointer;padding:4px 0">▸ 상세 설정 (선택)</summary>
+      <div style="margin-top:10px">
+        <div class="form-row"><input class="form-input" id="newSector" placeholder="분야 (Semiconductor)"></div>
+        <div class="form-row"><input class="form-input" id="newKeywords" placeholder="뉴스 감지 키워드 (쉼표 구분: GPU, AI chip)"></div>
+        <div class="form-hint">이 키워드가 뉴스에 나타나면 점수에 반영됩니다. 안 넣으면 티커+회사명으로 자동 설정.</div>
+        <div class="form-row"><input class="form-input" id="newRelated" placeholder="관련 종목 (쉼표 구분: AMD, TSM)"></div>
+        <div class="form-row"><input class="form-input" id="newNotes" placeholder="메모 (AI 서버 대장주)"></div>
+      </div>
+    </details>
     <div class="form-row">
-      <input class="form-input" id="newKeywords" placeholder="키워드 (쉼표 구분: GPU, AI chip, Blackwell)">
-    </div>
-    <div class="form-row">
-      <input class="form-input" id="newRelated" placeholder="관련 종목 (쉼표 구분: AMD, TSM)">
-      <select class="form-input form-input-sm" id="newChina">
-        <option value="low">China: Low</option>
-        <option value="medium">China: Medium</option>
-        <option value="high">China: High</option>
-      </select>
-    </div>
-    <div class="form-row">
-      <input class="form-input" id="newNotes" placeholder="메모 (선택)">
-      <button class="btn btn-primary" onclick="addStock()">추가</button>
+      <button class="btn btn-primary" style="flex:1" onclick="addStock()">추가</button>
+      <button class="btn" onclick="toggleAddForm()">취소</button>
     </div>
   </div>
 </div>
-
-<!-- Stock List -->
 <div class="list" id="stockList"></div>
-
-<!-- Floating Save Bar -->
 <div class="save-bar" id="saveBar">
   <span class="change-count" id="changeCount"></span>
   <button class="btn btn-save" id="saveBtn" onclick="saveToGitHub()">💾 GitHub에 저장</button>
   <button class="btn" onclick="discardChanges()">취소</button>
 </div>
-
 <script>
-// ============================================================
-// State
-// ============================================================
-let watchlist = [];
-let originalJson = "";
-let hasChanges = false;
-
-const STORAGE_KEY = "sentinel_gh";
-const DEFAULT_WATCHLIST = [
-  {
-    active: true, ticker: "AMAT", name: "Applied Materials",
-    sector: "Semiconductor Equipment",
-    related: ["ASML","LRCX","KLAC","TSM","INTC"],
-    keywords: ["Applied Materials","AMAT","EUV","High-NA","GAA","advanced packaging","HBM","CMP","CVD","etch","ion implant","WFE","BIS","export control","CHIPS Act"],
-    china_exposure: "high", notes: "WFE 1위. AI/HBM 수혜. BIS 수출규제 리스크."
-  },
-  {
-    active: true, ticker: "NVDA", name: "NVIDIA",
-    sector: "Semiconductor",
-    related: ["AMD","AVGO","TSM","SMCI","MRVL"],
-    keywords: ["NVIDIA","NVDA","GPU","Blackwell","Rubin","data center","AI chip","CUDA","HBM","Jensen Huang","hyperscaler","inference"],
-    china_exposure: "high", notes: "AI GPU 지배적. 데이터센터 매출 핵심."
-  },
-  {
-    active: true, ticker: "ASML", name: "ASML Holding",
-    sector: "Semiconductor Equipment",
-    related: ["AMAT","LRCX","KLAC","TSM"],
-    keywords: ["ASML","EUV","High-NA","lithography","DUV","TSMC","Samsung foundry","Intel foundry"],
-    china_exposure: "high", notes: "EUV 독점. 수출규제 직접 영향."
-  },
-  {
-    active: true, ticker: "TSM", name: "TSMC",
-    sector: "Semiconductor Foundry",
-    related: ["AMAT","ASML","NVDA","AAPL"],
-    keywords: ["TSMC","TSM","foundry","N2","N3","A16","advanced packaging","CoWoS","capex","Arizona fab","Japan fab"],
-    china_exposure: "medium", notes: "파운드리 1위. CapEx가 장비주 선행지표."
-  },
-  {
-    active: false, ticker: "AMD", name: "Advanced Micro Devices",
-    sector: "Semiconductor",
-    related: ["NVDA","INTC","TSM"],
-    keywords: ["AMD","EPYC","Ryzen","MI300","MI400","data center","AI accelerator","Lisa Su"],
-    china_exposure: "medium", notes: "NVDA 대안. AI 가속기 시장 진입."
-  },
-  {
-    active: false, ticker: "AVGO", name: "Broadcom",
-    sector: "Semiconductor",
-    related: ["NVDA","MRVL","QCOM"],
-    keywords: ["Broadcom","AVGO","custom silicon","ASIC","VMware","networking","AI networking","Hock Tan"],
-    china_exposure: "low", notes: "커스텀 AI칩 + VMware. 네트워킹 강자."
-  },
-  {
-    active: false, ticker: "SMCI", name: "Super Micro Computer",
-    sector: "IT Infrastructure",
-    related: ["NVDA","DELL","HPE"],
-    keywords: ["Super Micro","SMCI","AI server","GPU server","liquid cooling","rack scale"],
-    china_exposure: "low", notes: "AI 서버 조립. NVDA GPU 탑재 서버 대표주."
-  }
+let watchlist=[],originalJson="",hasChanges=false;
+const SK="sentinel_gh";
+const DW=[
+{active:true,ticker:"AMAT",name:"Applied Materials",sector:"Semiconductor Equipment",related:["ASML","LRCX","KLAC","TSM","INTC"],keywords:["Applied Materials","AMAT","EUV","High-NA","GAA","advanced packaging","HBM","CMP","CVD","etch","ion implant","WFE","BIS","export control","CHIPS Act"],china_exposure:"high",notes:"WFE 1위. AI/HBM 수혜."},
+{active:true,ticker:"NVDA",name:"NVIDIA",sector:"Semiconductor",related:["AMD","AVGO","TSM","SMCI","MRVL"],keywords:["NVIDIA","NVDA","GPU","Blackwell","Rubin","data center","AI chip","CUDA","HBM","Jensen Huang"],china_exposure:"high",notes:"AI GPU 지배적."},
+{active:true,ticker:"ASML",name:"ASML Holding",sector:"Semiconductor Equipment",related:["AMAT","LRCX","KLAC","TSM"],keywords:["ASML","EUV","High-NA","lithography","DUV"],china_exposure:"high",notes:"EUV 독점."},
+{active:true,ticker:"TSM",name:"TSMC",sector:"Semiconductor Foundry",related:["AMAT","ASML","NVDA","AAPL"],keywords:["TSMC","TSM","foundry","N2","N3","A16","CoWoS","capex"],china_exposure:"medium",notes:"파운드리 1위."},
+{active:false,ticker:"AMD",name:"Advanced Micro Devices",sector:"Semiconductor",related:["NVDA","INTC","TSM"],keywords:["AMD","EPYC","Ryzen","MI300","data center"],china_exposure:"medium",notes:"NVDA 대안."},
+{active:false,ticker:"AVGO",name:"Broadcom",sector:"Semiconductor",related:["NVDA","MRVL","QCOM"],keywords:["Broadcom","AVGO","ASIC","VMware","networking"],china_exposure:"low",notes:"커스텀 AI칩."},
+{active:false,ticker:"SMCI",name:"Super Micro Computer",sector:"IT Infrastructure",related:["NVDA","DELL","HPE"],keywords:["Super Micro","SMCI","AI server","GPU server"],china_exposure:"low",notes:"AI 서버."}
 ];
 
-// ============================================================
-// Init
-// ============================================================
-window.addEventListener("DOMContentLoaded", async () => {
-  const gh = getGHConfig();
-  
-  if (gh.token && gh.repo) {
-    await loadFromGitHub();
-  } else {
-    // GitHub 미연결 시 기본 데이터 사용
-    watchlist = JSON.parse(JSON.stringify(DEFAULT_WATCHLIST));
-    originalJson = JSON.stringify(watchlist);
-    render();
-    // 처음이면 설정 오버레이
-    if (!gh.token) {
-      document.getElementById("setupOverlay").style.display = "flex";
-    }
-  }
-  
-  document.getElementById("searchBox").addEventListener("input", render);
+window.addEventListener("DOMContentLoaded",async()=>{
+  const g=getGH();
+  if(g.token&&g.repo){await loadGH()}
+  else{watchlist=structuredClone(DW);originalJson=JSON.stringify(watchlist);render();if(!g.token)document.getElementById("setupOverlay").style.display="flex"}
+  document.getElementById("searchBox").addEventListener("input",render);
 });
 
-// ============================================================
-// GitHub Config
-// ============================================================
-function getGHConfig() {
-  try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
-  } catch { return {}; }
+function getGH(){try{return JSON.parse(localStorage.getItem(SK)||"{}")}catch{return{}}}
+
+function saveSetup(){
+  const t=document.getElementById("setupToken").value.trim(),r=document.getElementById("setupRepo").value.trim();
+  if(!t){toast("토큰을 입력하세요","error");return}
+  localStorage.setItem(SK,JSON.stringify({token:t,repo:r}));
+  document.getElementById("setupOverlay").style.display="none";
+  toast("✅ 연결 완료!","success");loadGH();
+}
+function skipSetup(){document.getElementById("setupOverlay").style.display="none";watchlist=structuredClone(DW);originalJson=JSON.stringify(watchlist);render()}
+
+async function loadGH(){
+  const{token,repo}=getGH();if(!token||!repo)return;
+  try{
+    const r=await fetch(`https://api.github.com/repos/${repo}/contents/watchlist.json`,{headers:{Authorization:`Bearer ${token}`,Accept:"application/vnd.github.v3+json"}});
+    if(r.ok){const d=await r.json();watchlist=(JSON.parse(atob(d.content))).watchlist||[];originalJson=JSON.stringify(watchlist);render();toast("✅ 로드 완료","success")}
+    else if(r.status===404){watchlist=structuredClone(DW);originalJson="[]";hasChanges=true;render();updateSaveBar();toast("📋 기본 목록 로드. 저장해주세요.","success")}
+    else throw new Error(`HTTP ${r.status}`)
+  }catch(e){toast("⚠️ "+e.message,"error");watchlist=structuredClone(DW);originalJson=JSON.stringify(watchlist);render()}
 }
 
-function saveSetup() {
-  const token = document.getElementById("setupToken").value.trim();
-  const repo = document.getElementById("setupRepo").value.trim();
-  if (!token || !repo) return;
-  
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({ token, repo }));
-  document.getElementById("setupOverlay").style.display = "none";
-  toast("✅ GitHub 연결 완료", "success");
-  loadFromGitHub();
+async function saveToGitHub(){
+  const{token,repo}=getGH();
+  if(!token||!repo){document.getElementById("setupOverlay").style.display="flex";return}
+  const btn=document.getElementById("saveBtn");btn.disabled=true;btn.textContent="저장 중...";
+  try{
+    let sha=null;
+    try{const r=await fetch(`https://api.github.com/repos/${repo}/contents/watchlist.json`,{headers:{Authorization:`Bearer ${token}`}});if(r.ok)sha=(await r.json()).sha}catch{}
+    const body={message:`📋 watchlist: ${watchlist.filter(w=>w.active).length}개 감시중`,content:btoa(unescape(encodeURIComponent(JSON.stringify({watchlist},null,2))))};
+    if(sha)body.sha=sha;
+    const r=await fetch(`https://api.github.com/repos/${repo}/contents/watchlist.json`,{method:"PUT",headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/json"},body:JSON.stringify(body)});
+    if(r.ok){originalJson=JSON.stringify(watchlist);hasChanges=false;updateSaveBar();toast("✅ 저장 완료!","success")}
+    else throw new Error((await r.json()).message||`HTTP ${r.status}`)
+  }catch(e){toast("⚠️ "+e.message,"error")}
+  finally{btn.disabled=false;btn.textContent="💾 GitHub에 저장"}
 }
 
-function skipSetup() {
-  document.getElementById("setupOverlay").style.display = "none";
-  watchlist = JSON.parse(JSON.stringify(DEFAULT_WATCHLIST));
-  originalJson = JSON.stringify(watchlist);
-  render();
+function render(){
+  const q=document.getElementById("searchBox").value.toLowerCase();
+  const el=document.getElementById("stockList");
+  const fl=watchlist.filter(w=>!q||w.ticker.toLowerCase().includes(q)||w.name.toLowerCase().includes(q));
+  el.innerHTML=fl.map(w=>{
+    const i=watchlist.indexOf(w);
+    const ct=w.china_exposure==="high"?'<span class="tag tag-china-high">🇨🇳 수출규제 리스크</span>':w.china_exposure==="medium"?'<span class="tag tag-china-medium">🇨🇳 일부 노출</span>':"";
+    return`<div class="card ${w.active?"":"inactive"}"><div class="card-main">
+      <div class="toggle ${w.active?"on":""}" onclick="toggleActive(${i})"><div class="toggle-track"></div><div class="toggle-thumb"></div></div>
+      <div class="card-info" onclick="toggleDetail(${i})"><div class="card-top"><span class="ticker">${w.ticker}</span><span class="name">${w.name}</span></div>
+      <div class="card-bottom">${w.sector?`<span class="tag tag-sector">${w.sector}</span>`:""}${ct}${w.notes?`<span class="tag">${w.notes}</span>`:""}</div></div>
+      <button class="expand-btn" id="exp-${i}" onclick="toggleDetail(${i})">▾</button></div>
+      <div class="card-detail" id="det-${i}">${w.keywords.length?`<div class="detail-section"><div class="detail-label">뉴스 감지 키워드</div><div class="detail-keywords">${w.keywords.map(k=>`<span class="kw-tag">${k}</span>`).join("")}</div></div>`:""}${w.related.length?`<div class="detail-section"><div class="detail-label">관련 종목</div><div class="detail-related">${w.related.map(r=>`<span class="rel-tag">${r}</span>`).join("")}</div></div>`:""}
+      <div style="margin-top:12px"><button class="btn" style="font-size:12px;padding:6px 12px" onclick="deleteStock(${i})">🗑 삭제</button></div></div></div>`
+  }).join("");
+  document.getElementById("activeCount").textContent=`${watchlist.filter(w=>w.active).length} 감시중`;
+  document.getElementById("totalCount").textContent=`${watchlist.length} 전체`;
 }
 
-// ============================================================
-// GitHub API
-// ============================================================
-async function loadFromGitHub() {
-  const { token, repo } = getGHConfig();
-  if (!token || !repo) return;
-  
-  try {
-    const resp = await fetch(`https://api.github.com/repos/${repo}/contents/watchlist.json`, {
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github.v3+json" }
-    });
-    
-    if (resp.ok) {
-      const data = await resp.json();
-      const content = JSON.parse(atob(data.content));
-      watchlist = content.watchlist || [];
-      originalJson = JSON.stringify(watchlist);
-      render();
-    } else if (resp.status === 404) {
-      // 파일 없음 → 기본값 사용
-      watchlist = JSON.parse(JSON.stringify(DEFAULT_WATCHLIST));
-      originalJson = JSON.stringify(watchlist);
-      hasChanges = true;
-      render();
-      updateSaveBar();
-      toast("📋 watchlist.json 미발견 — 기본 목록 로드됨. 저장해주세요.", "success");
-    } else {
-      throw new Error(`HTTP ${resp.status}`);
-    }
-  } catch (e) {
-    console.error(e);
-    toast("⚠️ GitHub 로드 실패: " + e.message, "error");
-    watchlist = JSON.parse(JSON.stringify(DEFAULT_WATCHLIST));
-    originalJson = JSON.stringify(watchlist);
-    render();
-  }
+function toggleActive(i){watchlist[i].active=!watchlist[i].active;markChanged();render()}
+function toggleDetail(i){document.getElementById(`det-${i}`).classList.toggle("show");document.getElementById(`exp-${i}`).classList.toggle("open")}
+function toggleAddForm(){document.getElementById("addForm").classList.toggle("show")}
+
+function addStock(){
+  const ticker=document.getElementById("newTicker").value.trim().toUpperCase(),name=document.getElementById("newName").value.trim();
+  if(!ticker||!name){toast("티커와 회사명을 입력하세요","error");return}
+  if(watchlist.some(w=>w.ticker===ticker)){toast(ticker+"은 이미 있습니다","error");return}
+  const kw=document.getElementById("newKeywords").value.trim(),rel=document.getElementById("newRelated").value.trim();
+  watchlist.unshift({active:true,ticker,name,sector:document.getElementById("newSector").value.trim()||"",related:rel?rel.split(",").map(s=>s.trim().toUpperCase()):[],keywords:kw?[ticker,name,...kw.split(",").map(s=>s.trim())]:[ticker,name],china_exposure:"low",notes:document.getElementById("newNotes").value.trim()||""});
+  ["newTicker","newName","newSector","newKeywords","newRelated","newNotes"].forEach(id=>document.getElementById(id).value="");
+  document.getElementById("addForm").classList.remove("show");markChanged();render();toast("✅ "+ticker+" 추가","success");
 }
 
-async function saveToGitHub() {
-  const { token, repo } = getGHConfig();
-  
-  if (!token || !repo) {
-    document.getElementById("setupOverlay").style.display = "flex";
-    return;
-  }
-  
-  const btn = document.getElementById("saveBtn");
-  btn.disabled = true;
-  btn.textContent = "저장 중...";
-  
-  try {
-    // 현재 파일 SHA 가져오기
-    let sha = null;
-    try {
-      const existing = await fetch(`https://api.github.com/repos/${repo}/contents/watchlist.json`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (existing.ok) {
-        const d = await existing.json();
-        sha = d.sha;
-      }
-    } catch {}
-    
-    const fileContent = JSON.stringify({ watchlist }, null, 2);
-    const body = {
-      message: `📋 watchlist 업데이트: ${watchlist.filter(w=>w.active).length}개 활성`,
-      content: btoa(unescape(encodeURIComponent(fileContent))),
-    };
-    if (sha) body.sha = sha;
-    
-    const resp = await fetch(`https://api.github.com/repos/${repo}/contents/watchlist.json`, {
-      method: "PUT",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
-    
-    if (resp.ok) {
-      originalJson = JSON.stringify(watchlist);
-      hasChanges = false;
-      updateSaveBar();
-      toast("✅ GitHub에 저장 완료!", "success");
-    } else {
-      const err = await resp.json();
-      throw new Error(err.message || `HTTP ${resp.status}`);
-    }
-  } catch (e) {
-    toast("⚠️ 저장 실패: " + e.message, "error");
-  } finally {
-    btn.disabled = false;
-    btn.textContent = "💾 GitHub에 저장";
-  }
-}
-
-// ============================================================
-// Render
-// ============================================================
-function render() {
-  const query = document.getElementById("searchBox").value.toLowerCase();
-  const container = document.getElementById("stockList");
-  
-  const filtered = watchlist.filter(w => {
-    if (!query) return true;
-    return w.ticker.toLowerCase().includes(query) ||
-           w.name.toLowerCase().includes(query) ||
-           w.sector.toLowerCase().includes(query);
-  });
-  
-  container.innerHTML = filtered.map((w, idx) => {
-    const realIdx = watchlist.indexOf(w);
-    const chinaClass = w.china_exposure === "high" ? "tag-china-high" :
-                       w.china_exposure === "medium" ? "tag-china-medium" : "";
-    
-    return `
-      <div class="card ${w.active ? '' : 'inactive'}" id="card-${realIdx}">
-        <div class="card-main">
-          <div class="toggle" onclick="event.stopPropagation()">
-            <input type="checkbox" ${w.active ? 'checked' : ''} 
-                   onchange="toggleActive(${realIdx}, this.checked)">
-            <div class="toggle-track"></div>
-            <div class="toggle-thumb"></div>
-          </div>
-          <div class="card-info" onclick="toggleDetail(${realIdx})">
-            <div class="card-top">
-              <span class="ticker">${w.ticker}</span>
-              <span class="name">${w.name}</span>
-            </div>
-            <div class="card-bottom">
-              <span class="tag tag-sector">${w.sector}</span>
-              ${w.china_exposure !== 'low' ? `<span class="tag ${chinaClass}">🇨🇳 ${w.china_exposure}</span>` : ''}
-              <span class="tag">${w.keywords.length} keywords</span>
-              <span class="tag">${w.related.length} related</span>
-            </div>
-          </div>
-          <button class="expand-btn" id="expand-${realIdx}" onclick="toggleDetail(${realIdx})">▾</button>
-        </div>
-        <div class="card-detail" id="detail-${realIdx}">
-          <div class="detail-section">
-            <div class="detail-label">Keywords</div>
-            <div class="detail-keywords">
-              ${w.keywords.map(k => `<span class="kw-tag">${k}</span>`).join('')}
-            </div>
-          </div>
-          <div class="detail-section">
-            <div class="detail-label">Related</div>
-            <div class="detail-related">
-              ${w.related.map(r => `<span class="rel-tag">${r}</span>`).join('')}
-            </div>
-          </div>
-          ${w.notes ? `
-          <div class="detail-section">
-            <div class="detail-label">Notes</div>
-            <div class="detail-notes">${w.notes}</div>
-          </div>` : ''}
-          <div style="margin-top:12px; display:flex; gap:6px;">
-            <button class="btn" style="font-size:12px; padding:6px 12px;" 
-                    onclick="deleteStock(${realIdx})">🗑 삭제</button>
-          </div>
-        </div>
-      </div>
-    `;
-  }).join('');
-  
-  // Counts
-  const activeN = watchlist.filter(w => w.active).length;
-  document.getElementById("activeCount").textContent = `${activeN} active`;
-  document.getElementById("totalCount").textContent = `${watchlist.length} total`;
-}
-
-// ============================================================
-// Actions
-// ============================================================
-function toggleActive(idx, checked) {
-  watchlist[idx].active = checked;
-  markChanged();
-  render();
-}
-
-function toggleDetail(idx) {
-  const el = document.getElementById(`detail-${idx}`);
-  const btn = document.getElementById(`expand-${idx}`);
-  el.classList.toggle("show");
-  btn.classList.toggle("open");
-}
-
-function toggleAddForm() {
-  document.getElementById("addForm").classList.toggle("show");
-  if (document.getElementById("addForm").classList.contains("show")) {
-    document.getElementById("newTicker").focus();
-  }
-}
-
-function addStock() {
-  const ticker = document.getElementById("newTicker").value.trim().toUpperCase();
-  const name = document.getElementById("newName").value.trim();
-  if (!ticker || !name) { toast("티커와 회사명을 입력하세요", "error"); return; }
-  
-  if (watchlist.some(w => w.ticker === ticker)) {
-    toast(`${ticker}은 이미 목록에 있습니다`, "error"); return;
-  }
-  
-  const kw = document.getElementById("newKeywords").value.trim();
-  const rel = document.getElementById("newRelated").value.trim();
-  
-  watchlist.push({
-    active: true,
-    ticker,
-    name,
-    sector: document.getElementById("newSector").value.trim() || "Other",
-    related: rel ? rel.split(",").map(s => s.trim().toUpperCase()) : [],
-    keywords: kw ? [ticker, name, ...kw.split(",").map(s => s.trim())] : [ticker, name],
-    china_exposure: document.getElementById("newChina").value,
-    notes: document.getElementById("newNotes").value.trim(),
-  });
-  
-  // Reset form
-  ["newTicker","newName","newSector","newKeywords","newRelated","newNotes"].forEach(
-    id => document.getElementById(id).value = ""
-  );
-  document.getElementById("addForm").classList.remove("show");
-  
-  markChanged();
-  render();
-  toast(`✅ ${ticker} 추가됨`, "success");
-}
-
-function deleteStock(idx) {
-  const ticker = watchlist[idx].ticker;
-  if (!confirm(`${ticker}을(를) 삭제하시겠습니까?`)) return;
-  watchlist.splice(idx, 1);
-  markChanged();
-  render();
-  toast(`🗑 ${ticker} 삭제됨`, "success");
-}
-
-function discardChanges() {
-  watchlist = JSON.parse(originalJson);
-  hasChanges = false;
-  updateSaveBar();
-  render();
-}
-
-// ============================================================
-// Change Tracking
-// ============================================================
-function markChanged() {
-  hasChanges = JSON.stringify(watchlist) !== originalJson;
-  updateSaveBar();
-}
-
-function updateSaveBar() {
-  const bar = document.getElementById("saveBar");
-  if (hasChanges) {
-    bar.classList.add("show");
-    const changes = countChanges();
-    document.getElementById("changeCount").textContent = `${changes}개 변경사항`;
-  } else {
-    bar.classList.remove("show");
-  }
-}
-
-function countChanges() {
-  const orig = JSON.parse(originalJson);
-  let count = 0;
-  // 길이 차이
-  count += Math.abs(watchlist.length - orig.length);
-  // 내용 차이
-  const minLen = Math.min(watchlist.length, orig.length);
-  for (let i = 0; i < minLen; i++) {
-    if (JSON.stringify(watchlist[i]) !== JSON.stringify(orig[i])) count++;
-  }
-  return Math.max(1, count);
-}
-
-// ============================================================
-// Toast
-// ============================================================
-function toast(msg, type = "success") {
-  const el = document.getElementById("toast");
-  el.textContent = msg;
-  el.className = `toast toast-${type} show`;
-  setTimeout(() => el.classList.remove("show"), 3000);
-}
+function deleteStock(i){if(!confirm(watchlist[i].ticker+" 삭제할까요?"))return;const t=watchlist[i].ticker;watchlist.splice(i,1);markChanged();render();toast("🗑 "+t+" 삭제","success")}
+function discardChanges(){watchlist=JSON.parse(originalJson);hasChanges=false;updateSaveBar();render()}
+function markChanged(){hasChanges=JSON.stringify(watchlist)!==originalJson;updateSaveBar()}
+function updateSaveBar(){const b=document.getElementById("saveBar");if(hasChanges){b.classList.add("show");document.getElementById("changeCount").textContent="변경사항 있음"}else b.classList.remove("show")}
+function toast(m,t="success"){const e=document.getElementById("toast");e.textContent=m;e.className=`toast toast-${t} show`;setTimeout(()=>e.classList.remove("show"),3000)}
 </script>
 </body>
 </html>
