@@ -28,26 +28,60 @@ class WatchItem:
     china_exposure: str = "low"  # low, medium, high
     notes: str = ""
 
-WATCHLIST = [
-    WatchItem(
-        ticker="AMAT",
-        name="Applied Materials",
-        sector="Semiconductor Equipment",
-        related=["ASML", "LRCX", "KLAC", "TSM", "INTC", "SMH"],
-        keywords=[
-            "Applied Materials", "AMAT",
-            "EUV", "High-NA", "GAA", "Gate-All-Around",
-            "advanced packaging", "HBM", "CMP", "CVD", "PVD",
-            "etch", "ion implant", "WFE",
-            "2nm", "3nm", "N2", "A16",
-            "BIS", "export control", "Entity List",
-            "CHIPS Act", "TSMC capex", "Samsung foundry",
-        ],
-        china_exposure="high",
-        notes="WFE 1위. AI/HBM 수혜. BIS 수출규제 리스크."
-    ),
-    # 워치리스트 추가는 여기에
-]
+
+def _load_watchlist():
+    """watchlist.json에서 active 종목 로드, 없으면 하드코딩 폴백"""
+    import json
+    json_path = os.path.join(os.path.dirname(__file__), "..", "watchlist.json")
+    
+    try:
+        with open(json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        items = []
+        for w in data.get("watchlist", []):
+            if not w.get("active", False):
+                continue
+            items.append(WatchItem(
+                ticker=w["ticker"],
+                name=w.get("name", w["ticker"]),
+                sector=w.get("sector", ""),
+                related=w.get("related", []),
+                keywords=w.get("keywords", [w["ticker"], w.get("name", "")]),
+                china_exposure=w.get("china_exposure", "low"),
+                notes=w.get("notes", ""),
+            ))
+        if items:
+            print(f"📋 워치리스트: {len(items)}개 활성 — {', '.join(i.ticker for i in items)}")
+            return items
+        print("⚠️ watchlist.json에 active 종목 없음, 하드코딩 폴백")
+    except FileNotFoundError:
+        print("⚠️ watchlist.json 없음, 하드코딩 폴백")
+    except Exception as e:
+        print(f"⚠️ watchlist.json 로드 실패 ({e}), 하드코딩 폴백")
+    
+    # 폴백
+    return [
+        WatchItem(
+            ticker="AMAT",
+            name="Applied Materials",
+            sector="Semiconductor Equipment",
+            related=["ASML", "LRCX", "KLAC", "TSM", "INTC", "SMH"],
+            keywords=[
+                "Applied Materials", "AMAT",
+                "EUV", "High-NA", "GAA", "Gate-All-Around",
+                "advanced packaging", "HBM", "CMP", "CVD", "PVD",
+                "etch", "ion implant", "WFE",
+                "2nm", "3nm", "N2", "A16",
+                "BIS", "export control", "Entity List",
+                "CHIPS Act", "TSMC capex", "Samsung foundry",
+            ],
+            china_exposure="high",
+            notes="WFE 1위. AI/HBM 수혜. BIS 수출규제 리스크."
+        ),
+    ]
+
+
+WATCHLIST = _load_watchlist()
 
 # ticker → WatchItem 빠른 조회
 WATCHMAP = {item.ticker: item for item in WATCHLIST}
