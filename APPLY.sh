@@ -1,12 +1,12 @@
 #!/bin/bash
-echo "📡 Stock Sentinel Phase 1.1 패치 적용"
+echo "📡 Stock Sentinel Phase 1.2 패치 적용"
 echo "=================================="
 
-cp sentinel/alerts/alert_system.py sentinel/alerts/alert_system.py.bak
-cp sentinel/alerts/telegram.py sentinel/alerts/telegram.py.bak
-cp sentinel/engines/ai_summarizer.py sentinel/engines/ai_summarizer.py.bak
-cp sentinel/collectors/news_collector.py sentinel/collectors/news_collector.py.bak
-cp sentinel/run_scan.py sentinel/run_scan.py.bak
+for f in sentinel/alerts/alert_system.py sentinel/alerts/telegram.py \
+         sentinel/engines/ai_summarizer.py sentinel/collectors/news_collector.py \
+         sentinel/run_scan.py sentinel/config/settings.py; do
+    [ -f "$f" ] && cp "$f" "${f}.bak"
+done
 echo "✅ 백업 완료"
 
 cp sentinel-patch/sentinel/alerts/alert_system.py sentinel/alerts/
@@ -14,20 +14,20 @@ cp sentinel-patch/sentinel/alerts/telegram.py sentinel/alerts/
 cp sentinel-patch/sentinel/engines/ai_summarizer.py sentinel/engines/
 cp sentinel-patch/sentinel/collectors/news_collector.py sentinel/collectors/
 cp sentinel-patch/sentinel/run_scan.py sentinel/
+cp sentinel-patch/sentinel/config/settings.py sentinel/config/
 
 echo "✅ 패치 복사 완료"
 
-git add sentinel/alerts/alert_system.py sentinel/alerts/telegram.py \
-       sentinel/engines/ai_summarizer.py sentinel/collectors/news_collector.py \
-       sentinel/run_scan.py
+git add sentinel/
+git commit -m "🔧 Phase 1.2: watchlist.json 경로 수정 + 전종목 알림
 
-git commit -m "🔧 Phase 1.1: 전종목 알림 + Markdown 안정화
-
-- run_scan.py v2: 종목별 try/except (1종목 에러→다른 종목 계속), 에러 텔레그램 알림
-- telegram.py v2: sanitize_title (뉴스제목 *_[] 제거), 연속발송 1.5s 딜레이
-- alert_system.py v4.1: Top-3 기사 제목 sanitize, source별 건수 표시
-- ai_summarizer.py v2: 환각방지 프롬프트
-- news_collector.py: Google News 매체명 추출"
+핵심 수정:
+- settings.py: watchlist.json 경로 탐색 (sentinel/ + 레포루트 + CWD 모두 검색)
+- run_scan.py v2: 종목별 try/except, 에러 텔레그램 알림
+- telegram.py v2: Markdown sanitize, 연속발송 딜레이
+- alert_system.py v4.1: Top-3 기사 필수 표시
+- ai_summarizer.py v2: 환각방지 프롬프트"
 
 echo ""
-echo "✅ 커밋 완료! git push 후 Actions에서 force_alert 테스트"
+echo "✅ git push 후 Actions → force_alert 테스트"
+echo "   이번에는 MU, AMAT, PANW 3개 모두 알림이 와야 합니다"

@@ -32,7 +32,25 @@ class WatchItem:
 def _load_watchlist():
     """watchlist.json에서 active 종목 로드, 없으면 하드코딩 폴백"""
     import json
-    json_path = os.path.join(os.path.dirname(__file__), "..", "watchlist.json")
+    
+    # 여러 가능한 경로 탐색
+    config_dir = os.path.dirname(__file__)  # sentinel/config/
+    candidates = [
+        os.path.join(config_dir, "..", "watchlist.json"),       # sentinel/watchlist.json
+        os.path.join(config_dir, "..", "..", "watchlist.json"),  # repo_root/watchlist.json
+        os.path.join(os.getcwd(), "watchlist.json"),            # CWD/watchlist.json
+        os.path.join(os.getcwd(), "..", "watchlist.json"),      # CWD/../watchlist.json
+    ]
+    
+    json_path = None
+    for p in candidates:
+        if os.path.exists(p):
+            json_path = p
+            break
+    
+    if not json_path:
+        print(f"⚠️ watchlist.json 없음 (검색: {[os.path.abspath(c) for c in candidates]}), 하드코딩 폴백")
+        return _fallback_watchlist()
     
     try:
         with open(json_path, "r", encoding="utf-8") as f:
@@ -51,7 +69,7 @@ def _load_watchlist():
                 notes=w.get("notes", ""),
             ))
         if items:
-            print(f"📋 워치리스트: {len(items)}개 활성 — {', '.join(i.ticker for i in items)}")
+            print(f"📋 워치리스트: {len(items)}개 활성 — {', '.join(i.ticker for i in items)} (from {os.path.abspath(json_path)})")
             return items
         print("⚠️ watchlist.json에 active 종목 없음, 하드코딩 폴백")
     except FileNotFoundError:
@@ -59,7 +77,11 @@ def _load_watchlist():
     except Exception as e:
         print(f"⚠️ watchlist.json 로드 실패 ({e}), 하드코딩 폴백")
     
-    # 폴백
+    return _fallback_watchlist()
+
+
+def _fallback_watchlist():
+    """하드코딩 폴백 워치리스트"""
     return [
         WatchItem(
             ticker="AMAT",
