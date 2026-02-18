@@ -22,6 +22,20 @@ def generate_alert_id(ticker: str) -> str:
     return f"SEN-{now.strftime('%Y%m%d')}-{ticker}-{now.strftime('%H%M%S')}"
 
 
+def _is_article_url(url: str) -> bool:
+    """실제 기사 URL인지 검증"""
+    if not url:
+        return False
+    bad = ['news.google.com/rss', 'finnhub.io/api']
+    if any(p in url for p in bad):
+        return False
+    from urllib.parse import urlparse
+    path = urlparse(url).path.strip('/')
+    if not path or len(path) < 3:
+        return False
+    return True
+
+
 def should_send_alert(ticker: str, classification: str) -> bool:
     # 쿨다운
     last_time = get_last_alert_time(ticker)
@@ -104,7 +118,7 @@ def format_telegram_alert(ticker: str, psi_result: Dict, flash_result: Dict,
     else:
         for c in candidates:
             u = c.get('source_url', '')
-            if u and 'news.google.com/rss' not in u and 'finnhub.io/api' not in u:
+            if u and _is_article_url(u):
                 key_url = u
                 break
     if key_url:
