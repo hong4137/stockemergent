@@ -35,7 +35,7 @@ def should_send_alert(ticker: str, classification: str) -> bool:
             pass
     # Noise 일일 제한
     if classification == "Noise":
-        noise_count = count_noise_alerts_today()
+        noise_count = count_noise_alerts_today(ticker)
         if noise_count >= NOISE_ALERTS_MAX_PER_DAY:
             print(f"  🔇 Noise 일일 한도 초과 ({noise_count}/{NOISE_ALERTS_MAX_PER_DAY})")
             return False
