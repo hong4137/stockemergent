@@ -51,7 +51,7 @@
       "notes": "WFE 1Ã¬ÂÂ. AI/HBM Ã¬ÂÂÃ­ÂÂ. BIS Ã¬ÂÂÃ¬Â¶ÂÃªÂ·ÂÃ¬Â Â Ã«Â¦Â¬Ã¬ÂÂ¤Ã­ÂÂ¬."
     },
     {
-      "active": true,
+      "active": false,
       "ticker": "NVDA",
       "name": "NVIDIA",
       "sector": "Semiconductor",
