@@ -1,0 +1,60 @@
+name: "📡 Stock Sentinel Scan"
+
+on:
+  schedule:
+    # 장중 (ET 09:00-16:00 = UTC 14:00-21:00): 15분 간격, 평일
+    - cron: '*/15 14-20 * * 1-5'
+    # 장후 (ET 16:00-18:00 = UTC 21:00-23:00): 30분 간격
+    - cron: '0,30 21-22 * * 1-5'
+    # 장외 야간 (UTC 23, 0~13): 1시간 간격
+    - cron: '0 23 * * 1-5'
+    - cron: '0 0-13 * * 1-5'
+    # 주말: 4시간
+    - cron: '0 */4 * * 0,6'
+
+  workflow_dispatch:
+    inputs:
+      ticker:
+        description: '스캔할 종목 (비우면 전체)'
+        required: false
+        default: ''
+      force_alert:
+        description: '강제 알림 (테스트용)'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: 📦 Install
+        run: pip install -r requirements.txt
+
+      - name: 📡 Scan
+        env:
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SCAN_MODE: market_open
+          SCAN_TICKER: ${{ github.event.inputs.ticker || '' }}
+          FORCE_ALERT: ${{ github.event.inputs.force_alert || 'false' }}
+        run: cd sentinel && python run_scan.py
+
+      - name: 💾 Save DB
+        run: |
+          git config user.name "Sentinel Bot"
+          git config user.email "sentinel@bot"
+          git add -f sentinel/storage/sentinel.db || true
+          git diff --cached --quiet || git commit -m "📡 scan $(date -u +%H:%M)" && git push || true
