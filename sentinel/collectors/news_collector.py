@@ -49,8 +49,16 @@ def collect_google_news(ticker: str, hours: int = 24) -> List[Dict]:
                     continue
                 
                 title = entry.get('title', '')
-                link = _resolve_google_news_url(entry)
+                link, source_name = _resolve_google_news_url(entry)
                 summary = entry.get('summary', '')
+                
+                # title에서 " - 매체명" 분리
+                clean_title = title
+                if ' - ' in title and not source_name:
+                    clean_title, source_name = title.rsplit(' - ', 1)
+                    source_name = source_name.strip()
+                elif ' - ' in title:
+                    clean_title = title.rsplit(' - ', 1)[0]
                 
                 # 키워드 매칭
                 text = (title + " " + summary).lower()
@@ -63,10 +71,10 @@ def collect_google_news(ticker: str, hours: int = 24) -> List[Dict]:
                 article = {
                     "ticker": ticker,
                     "timestamp": pub_time.isoformat(),
-                    "title": _clean_html(title),
+                    "title": _clean_html(clean_title),
                     "summary": _clean_html(summary)[:500],
                     "url": link,
-                    "source": "google_news",
+                    "source": f"google_news:{source_name}" if source_name else "google_news",
                     "source_type": "news",
                     "sentiment": sentiment,
                     "keywords_matched": matched_keywords,
@@ -226,40 +234,44 @@ def collect_all_news(ticker: str) -> Dict:
 # 유틸리티
 # ============================================================
 
-def _resolve_google_news_url(entry) -> str:
-    """Google News RSS의 리다이렉트 URL을 실제 기사 URL로 변환"""
+def _resolve_google_news_url(entry) -> tuple:
+    """
+    Google News RSS에서 실제 기사 URL + 매체명 추출
+    Returns: (url, source_name)
+    """
     link = entry.get('link', '')
+    source_name = ""
     
-    # 1. summary/description에서 실제 URL 추출 시도
-    #    Google News RSS는 <a href="실제URL"> 형태를 summary에 포함하기도 함
+    # 0. source 태그에서 매체명 추출 (가장 신뢰성 높음)
+    if hasattr(entry, 'source'):
+        if hasattr(entry.source, 'title'):
+            source_name = entry.source.title or ""
+        if hasattr(entry.source, 'href') and entry.source.href:
+            return entry.source.href, source_name
+    
+    # 1. title에서 매체명 추출 ("... - Reuters" 패턴)
+    title = entry.get('title', '')
+    if ' - ' in title:
+        source_name = source_name or title.rsplit(' - ', 1)[-1].strip()
+    
+    # 2. summary/description에서 실제 URL 추출
     summary = entry.get('summary', '') or entry.get('description', '')
     if summary:
         match = re.search(r'href="(https?://(?!news\.google\.com)[^"]+)"', summary)
         if match:
-            return match.group(1)
+            return match.group(1), source_name
     
-    # 2. source URL이 있으면 사용
-    if hasattr(entry, 'source') and hasattr(entry.source, 'href'):
-        return entry.source.href
-    
-    # 3. Google News 리다이렉트 URL이면 HEAD 요청으로 실제 URL 추출
+    # 3. Google News 리다이렉트 → HEAD 요청
     if 'news.google.com' in link:
         try:
-            resp = requests.head(link, allow_redirects=True, timeout=5)
+            resp = requests.head(link, allow_redirects=True, timeout=5,
+                                headers={"User-Agent": "Mozilla/5.0"})
             if resp.url and 'news.google.com' not in resp.url:
-                return resp.url
-        except:
-            pass
-        
-        # 4. HEAD 실패 시 GET으로 시도
-        try:
-            resp = requests.get(link, allow_redirects=True, timeout=5)
-            if resp.url and 'news.google.com' not in resp.url:
-                return resp.url
+                return resp.url, source_name
         except:
             pass
     
-    return link
+    return link, source_name
 
 def _simple_sentiment(text: str) -> str:
     """간단한 키워드 기반 센티멘트 판정"""
