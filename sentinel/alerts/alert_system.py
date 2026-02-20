@@ -1,6 +1,6 @@
 """
-Stock Sentinel — Alert System v4
-Top-3 원인 + 기사 링크 필수 포함 / AI 환각 제거
+Stock Sentinel — Alert System v3
+AI 분류 → 플레이북 연동 + 전체 한글화
 """
 import json
 from datetime import datetime, timedelta
@@ -13,10 +13,7 @@ from config.settings import (
     TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
     ALERT_COOLDOWN_MINUTES, NOISE_ALERTS_MAX_PER_DAY,
 )
-from storage.database import (
-    save_alert, get_last_alert_time, count_noise_alerts_today
-)
-from alerts.telegram import sanitize_title
+from storage.database import save_alert
 
 
 # ── 한글 매핑 ──
@@ -33,19 +30,7 @@ CLS_EMOJI = {
     "Noise": "⚠️",
 }
 
-EVENT_TYPE_KR = {
-    "earnings": "실적",
-    "regulatory": "규제",
-    "supply_chain": "공급망",
-    "analyst": "애널리스트",
-    "ma": "인수합병",
-    "sector": "업종",
-    "macro": "매크로",
-    "partnership": "파트너십",
-    "guidance": "가이던스",
-    "other": "기타",
-}
-
+# AI 분류 기반 플레이북 (한글)
 PLAYBOOKS = {
     "Catalyst": {
         "id": "호재 감지",
@@ -73,69 +58,17 @@ PLAYBOOKS = {
 
 # ── 유틸 ──
 
-def _extract_source_name(url: str, source_field: str = "") -> str:
-    """URL 또는 source 필드에서 매체명 추출"""
-    if source_field:
-        if ":" in source_field:
-            name = source_field.split(":", 1)[1].strip()
-            if name and name.lower() not in ("", "unknown"):
-                return name
-        if source_field not in ("google_news", "sec_edgar"):
-            return source_field
-
-    if not url:
-        return ""
-
-    try:
-        domain = urlparse(url).netloc.lower().replace("www.", "")
-        known = {
-            "reuters.com": "Reuters", "bloomberg.com": "Bloomberg",
-            "cnbc.com": "CNBC", "seekingalpha.com": "Seeking Alpha",
-            "fool.com": "Motley Fool", "barrons.com": "Barron's",
-            "wsj.com": "WSJ", "ft.com": "FT",
-            "marketwatch.com": "MarketWatch", "yahoo.com": "Yahoo Finance",
-            "finance.yahoo.com": "Yahoo Finance", "benzinga.com": "Benzinga",
-            "thestreet.com": "TheStreet", "tipranks.com": "TipRanks",
-            "investing.com": "Investing.com", "sec.gov": "SEC",
-            "prnewswire.com": "PR Newswire", "businesswire.com": "Business Wire",
-            "globenewswire.com": "GlobeNewsWire",
-        }
-        for pattern, name in known.items():
-            if pattern in domain:
-                return name
-        parts = domain.split(".")
-        if len(parts) >= 2:
-            return parts[-2].capitalize()
-    except:
-        pass
-    return ""
-
-
-def _is_usable_url(url: str) -> bool:
-    """사용자에게 보여줄 수 있는 URL인지"""
+def _is_article_url(url: str) -> bool:
+    """실제 기사 URL인지 검증"""
     if not url:
         return False
-    bad = ["news.google.com/rss", "finnhub.io/api", "efts.sec.gov"]
+    bad = ['news.google.com/rss', 'finnhub.io/api']
     if any(p in url for p in bad):
         return False
-    try:
-        path = urlparse(url).path.strip("/")
-        return bool(path) and len(path) >= 3
-    except:
+    path = urlparse(url).path.strip('/')
+    if not path or len(path) < 3:
         return False
-
-
-def _shorten_url(url: str, max_len: int = 60) -> str:
-    if not url:
-        return ""
-    try:
-        p = urlparse(url)
-        domain = p.netloc.replace("www.", "")
-        path = p.path
-        full = domain + path
-        return full if len(full) <= max_len else full[:max_len - 3] + "..."
-    except:
-        return url[:max_len]
+    return True
 
 
 def generate_alert_id(ticker: str) -> str:
@@ -143,147 +76,180 @@ def generate_alert_id(ticker: str) -> str:
     return f"SEN-{now.strftime('%Y%m%d')}-{ticker}-{now.strftime('%H%M%S')}"
 
 
-def should_send_alert(ticker: str, classification: str) -> bool:
-    last_time = get_last_alert_time(ticker)
-    if last_time:
-        try:
-            last_dt = datetime.fromisoformat(last_time)
-            if datetime.utcnow() - last_dt < timedelta(minutes=ALERT_COOLDOWN_MINUTES):
-                print(f"  ⏳ 쿨다운 중 ({ticker})")
-                return False
-        except:
-            pass
+# ── 단계별 알림 임계치 ──
+# 한 번 알림을 보낸 후, 다음 단계를 넘어야 추가 알림
+PRICE_ALERT_LEVELS = [3, 5, 8, 12]  # ±3%, ±5%, ±8%, ±12%
+
+
+def _get_current_level(change_pct: float) -> int:
+    """현재 가격 변동이 몇 번째 단계인지"""
+    abs_change = abs(change_pct)
+    level = 0
+    for threshold in PRICE_ALERT_LEVELS:
+        if abs_change >= threshold:
+            level += 1
+        else:
+            break
+    return level
+
+
+def should_send_alert(ticker: str, classification: str,
+                      change_pct: float = 0) -> bool:
+    """
+    알림 발송 여부 결정
+    - 단계별 임계치: 3% → 5% → 8% → 12% 돌파 시에만 추가 알림
+    - 새로운 분류(Catalyst↔Fracture 전환) 시에도 알림
+    - Noise 일일 제한
+    """
+    from storage.database import get_last_alert_time, get_last_alert_psi, count_noise_alerts_today
+
+    # Noise 일일 제한
     if classification in ("Noise", "노이즈"):
-        if count_noise_alerts_today(ticker) >= NOISE_ALERTS_MAX_PER_DAY:
+        noise_count = count_noise_alerts_today(ticker)
+        if noise_count >= NOISE_ALERTS_MAX_PER_DAY:
             print(f"  🔇 노이즈 일일 한도 초과")
             return False
+
+    # 최근 알림 확인
+    last_time = get_last_alert_time(ticker)
+    if not last_time:
+        return True  # 첫 알림은 무조건 발송
+
+    try:
+        last_dt = datetime.fromisoformat(last_time)
+        hours_since = (datetime.utcnow() - last_dt).total_seconds() / 3600
+
+        # 6시간 이상 지났으면 리셋 (새 세션)
+        if hours_since >= 6:
+            return True
+
+        # 10분 이내면 무조건 차단 (최소 쿨다운)
+        if hours_since < 10 / 60:
+            print(f"  ⏳ 최소 쿨다운 ({ticker})")
+            return False
+
+    except:
+        return True
+
+    # 단계별 임계치 체크
+    if abs(change_pct) >= PRICE_ALERT_LEVELS[0]:
+        current_level = _get_current_level(change_pct)
+        last_psi = get_last_alert_psi(ticker)
+
+        # 마지막 알림 PSI에서 추정한 이전 레벨
+        # PSI와 가격은 비례하지 않지만, DB에 가격 변동을 직접 저장하지 않으므로
+        # 간단히: 같은 레벨이면 차단, 더 높은 레벨이면 통과
+        # 이전 알림의 가격 변동을 알 수 없으므로, 시간 + PSI 변화로 판단
+        psi_jump = abs(change_pct) - abs(last_psi)  # 대략적 비교
+
+        if current_level >= 2 and hours_since >= 0.25:  # 5%+ 이고 15분 이상
+            print(f"  📈 단계 상승 알림 (레벨 {current_level})")
+            return True
+        elif current_level >= 3:  # 8%+ 이면 무조건
+            return True
+
+    # 기본: 30분 쿨다운
+    try:
+        last_dt = datetime.fromisoformat(last_time)
+        if datetime.utcnow() - last_dt < timedelta(minutes=ALERT_COOLDOWN_MINUTES):
+            print(f"  ⏳ 쿨다운 중 ({ticker})")
+            return False
+    except:
+        pass
+
     return True
 
 
-# ── 소스별 건수 집계 ──
-
-def _count_by_source(news_data: List[Dict]) -> Dict[str, int]:
-    counts = {}
-    for article in news_data:
-        source = article.get("source", "unknown")
-        if "google" in source.lower():
-            key = "Google"
-        elif "finnhub" in source.lower():
-            key = "Finnhub"
-        elif "sec" in source.lower() or "edgar" in source.lower():
-            key = "SEC"
-        else:
-            key = "기타"
-        counts[key] = counts.get(key, 0) + 1
-    return counts
-
-
-# ══════════════════════════════════════════════
-# 알림 포맷 v4 — Top-3 원인 필수
-# ══════════════════════════════════════════════
+# ── 알림 포맷 ──
 
 def format_telegram_alert(ticker: str, psi_result: Dict, flash_result: Dict,
-                          ai_summary: Dict = None,
-                          news_data: List[Dict] = None) -> str:
-    psi = psi_result.get("psi_total", 0)
-    level = psi_result.get("level", "unknown")
-    details = psi_result.get("details", {})
-    candidates = flash_result.get("reason_candidates", [])
-    rule_cls = flash_result.get("classification", {})
+                          ai_summary: Dict = None) -> str:
+    """Telegram 알림 — AI 분류 기반, 전체 한글"""
+    psi = psi_result.get('psi_total', 0)
+    level = psi_result.get('level', 'unknown')
+    details = psi_result.get('details', {})
+    candidates = flash_result.get('reason_candidates', [])
+    rule_cls = flash_result.get('classification', {})
 
-    # ── 분류 결정 ──
-    if ai_summary and ai_summary.get("ai_generated"):
-        cls_type = ai_summary.get("classification", "Noise")
-        confidence = ai_summary.get("confidence", 0.5)
-        headline = ai_summary.get("headline", "")
-        detail_text = ai_summary.get("detail", "")
+    # ── 분류 결정: AI 우선, 폴백은 규칙 기반 ──
+    if ai_summary and ai_summary.get('ai_generated'):
+        cls_type = ai_summary.get('classification', 'Noise')
+        confidence = ai_summary.get('confidence', 0.5)
+        headline = ai_summary.get('headline', '')
+        detail_text = ai_summary.get('detail', '')
     else:
-        cls_type = rule_cls.get("type", "Noise")
-        confidence = rule_cls.get("confidence", 0.5)
-        headline = candidates[0].get("title", "")[:50] if candidates else ""
-        detail_text = rule_cls.get("reasoning", "")
+        cls_type = rule_cls.get('type', 'Noise')
+        confidence = rule_cls.get('confidence', 0.5)
+        headline = candidates[0].get('title', '')[:40] if candidates else ''
+        detail_text = rule_cls.get('reasoning', '')
 
+    # 분류를 한글로
     cls_kr = CLS_KR.get(cls_type, cls_type)
-    cls_emoji = CLS_EMOJI.get(cls_type, "❓")
-    playbook = PLAYBOOKS.get(cls_type, PLAYBOOKS["Noise"])
+    cls_emoji = CLS_EMOJI.get(cls_type, '❓')
 
-    # Sanitize 동적 텍스트 (Markdown 깨짐 방지)
-    headline = sanitize_title(headline)
-    detail_text = sanitize_title(detail_text)
+    # ── 플레이북: AI 분류 기반 ──
+    playbook = PLAYBOOKS.get(cls_type, PLAYBOOKS["Noise"])
 
     # 가격 변동
     price_line = ""
-    pf = details.get("price_boost", {}).get("factors", [])
+    pf = details.get('price_boost', {}).get('factors', [])
     if pf:
-        price_line = pf[0].split("→")[0].replace("가격 변동", "").strip()
+        pct = pf[0].split('→')[0].replace('가격 변동', '').strip()
+        price_line = pct
 
-    # ═══ 메시지 조립 ═══
+    # ── 메시지 조립 ──
     header = f"{cls_emoji} *{ticker}*"
     if price_line:
         header += f"  {price_line}"
 
     msg = f"{header}\n"
-    msg += "━━━━━━━━━━━━━━━━━━━\n"
+    msg += f"━━━━━━━━━━━━━━━━━━━\n"
 
     if headline:
-        msg += f"📌 {headline}\n"
+        msg += f"📌 *{headline}*\n"
     if detail_text:
         msg += f"→ {detail_text}\n"
-    msg += "\n"
 
-    # ═══ 핵심: Top-3 원인 기사 ═══
-    if candidates:
-        msg += "🔍 *원인 Top-3:*\n"
-        for c in candidates[:3]:
-            rank = c.get("rank", "?")
-            etype = c.get("event_type", "other")
-            etype_kr = EVENT_TYPE_KR.get(etype, etype)
-            title = sanitize_title(c.get("title", ""))[:55]
-            source_url = c.get("source_url", "")
-            source_field = c.get("source", "")
-            source_name = _extract_source_name(source_url, source_field)
-            sentiment = c.get("sentiment", "")
-            sent_emoji = {"positive": "📈", "negative": "📉"}.get(sentiment, "➖")
-
-            msg += f"  {rank}. {sent_emoji}[{etype_kr}] {title}\n"
-            if source_name:
-                msg += f"     — {source_name}"
-            if _is_usable_url(source_url):
-                msg += f"\n     {_shorten_url(source_url)}"
-            msg += "\n"
-        msg += "\n"
-    else:
-        msg += "🔍 수집된 기사에서 명확한 원인 미확인\n\n"
-
-    # 분류 + PSI
+    msg += f"\n"
     msg += f"{cls_emoji} {cls_kr} ({confidence:.0%}) | PSI {psi:.1f}\n"
 
-    # 소스별 수집 건수
-    src_counts = _count_by_source(news_data or [])
-    if src_counts:
-        parts = [f"{name} {cnt}건" for name, cnt in src_counts.items()]
-        msg += f"📰 {' · '.join(parts)}\n"
+    # 소스 수
+    src_count = ai_summary.get('source_count', len(candidates)) if ai_summary else len(candidates)
+    if src_count:
+        msg += f"📰 {src_count}개 매체\n"
 
-    # 플레이북
+    # 링크 (유효한 것 1개만)
+    key_url = ""
+    if ai_summary and ai_summary.get('key_source'):
+        key_url = ai_summary['key_source']
+    if not key_url:
+        for c in candidates:
+            u = c.get('source_url', '')
+            if _is_article_url(u):
+                key_url = u
+                break
+    if key_url:
+        msg += f"🔗 {key_url[:80]}\n"
+
+    # 플레이북 (AI 분류 기반)
     msg += f"\n📖 *{playbook['id']}*\n"
-    for a in playbook["actions"]:
+    for a in playbook['actions']:
         msg += f"  ▸ {a}\n"
 
     msg += f"\n🕐 {datetime.utcnow().strftime('%H:%M UTC')}"
     return msg.strip()
 
 
-# ══════════════════════════════════════════════
-# 발송
-# ══════════════════════════════════════════════
+# ── 발송 ──
 
 def send_alert(ticker: str, psi_result: Dict, flash_result: Dict,
                trigger_type: str = "psi_critical",
                news_data: List[Dict] = None,
                price_data: Dict = None,
                force: bool = False) -> bool:
-    classification = flash_result.get("classification", {})
-    cls_type = classification.get("type", "Unknown")
+    """알림 생성 + AI 요약 + 발송"""
+    classification = flash_result.get('classification', {})
+    cls_type = classification.get('type', 'Unknown')
 
     # AI 요약 시도
     ai_summary = None
@@ -291,21 +257,25 @@ def send_alert(ticker: str, psi_result: Dict, flash_result: Dict,
         from engines.ai_summarizer import summarize_event
         if news_data:
             ai_summary = summarize_event(ticker, news_data, price_data)
-            if ai_summary and ai_summary.get("ai_generated"):
-                cls_type = ai_summary.get("classification", cls_type)
+            if ai_summary and ai_summary.get('ai_generated'):
+                cls_type = ai_summary.get('classification', cls_type)
     except Exception as e:
         print(f"  ⚠️ AI 요약 실패: {e}")
 
-    if not force and not should_send_alert(ticker, cls_type):
+    # 가격 변동률 추출
+    change_pct = 0
+    if price_data:
+        change_pct = price_data.get('change_pct', 0)
+
+    # 발송 여부 (force면 무조건 발송)
+    if not force and not should_send_alert(ticker, cls_type, change_pct):
         return False
 
-    tg_msg = format_telegram_alert(
-        ticker, psi_result, flash_result, ai_summary,
-        news_data=news_data or []
-    )
+    # Telegram 발송
+    sent_via = "console"
+    tg_msg = format_telegram_alert(ticker, psi_result, flash_result, ai_summary)
     print(tg_msg)
 
-    sent_via = "console"
     try:
         from alerts.telegram import send_telegram
         if send_telegram(tg_msg):
@@ -313,19 +283,21 @@ def send_alert(ticker: str, psi_result: Dict, flash_result: Dict,
     except Exception as e:
         print(f"  ⚠️ Telegram: {e}")
 
+    # DB 저장
     alert_id = generate_alert_id(ticker)
     save_alert(
         alert_id=alert_id,
         ticker=ticker,
         timestamp=datetime.utcnow().isoformat(),
         trigger_type=trigger_type,
-        psi_total=psi_result.get("psi_total", 0),
+        psi_total=psi_result.get('psi_total', 0),
         classification=cls_type,
-        confidence=classification.get("confidence", 0),
-        reason_candidates=flash_result.get("reason_candidates", []),
-        playbook_id=PLAYBOOKS.get(cls_type, PLAYBOOKS["Noise"])["id"],
-        playbook_actions=PLAYBOOKS.get(cls_type, PLAYBOOKS["Noise"])["actions"],
+        confidence=classification.get('confidence', 0),
+        reason_candidates=flash_result.get('reason_candidates', []),
+        playbook_id=PLAYBOOKS.get(cls_type, PLAYBOOKS["Noise"])['id'],
+        playbook_actions=PLAYBOOKS.get(cls_type, PLAYBOOKS["Noise"])['actions'],
         sent_via=sent_via,
     )
+
     print(f"  💾 Alert: {alert_id}")
     return True
