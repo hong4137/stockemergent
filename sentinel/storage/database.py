@@ -308,6 +308,16 @@ def get_last_alert_time(ticker: str) -> str:
         return row['timestamp'] if row else None
 
 
+def get_last_alert_psi(ticker: str) -> float:
+    """마지막 알림의 PSI 점수"""
+    with get_db() as conn:
+        row = conn.execute("""
+            SELECT psi_total FROM alerts WHERE ticker = ?
+            ORDER BY timestamp DESC LIMIT 1
+        """, (ticker,)).fetchone()
+        return row['psi_total'] if row else 0.0
+
+
 def count_noise_alerts_today(ticker: str) -> int:
     """오늘 Noise 알림 횟수"""
     today = datetime.utcnow().strftime("%Y-%m-%d")
