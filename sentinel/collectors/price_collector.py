@@ -1,233 +1,117 @@
 """
 Stock Sentinel — Price Collector
-시장 가격/거래량 데이터 수집
-네트워크 제한 환경에서는 웹 검색 폴백 사용
+yfinance 기반 + 장중 반전 감지
 """
-import json
-import re
-from datetime import datetime, timedelta
-from typing import Dict, Optional, List
-import sys, os
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from storage.database import save_price, get_recent_prices
+import yfinance as yf
+from datetime import datetime, timezone, timedelta
 
 
-def collect_price_yfinance(ticker: str) -> Optional[Dict]:
-    """yfinance로 가격 수집 (직접 네트워크 접근 가능 시)"""
+def collect_price_yfinance(ticker: str) -> dict:
+    """가격 데이터 수집 + 변동률 + 거래량 비율 + 장중 반전"""
     try:
-        import yfinance as yf
-        t = yf.Ticker(ticker)
-        hist = t.history(period="5d")
-        
-        if hist.empty:
+        stock = yf.Ticker(ticker)
+        hist = stock.history(period="5d")
+
+        if hist.empty or len(hist) < 2:
             return None
-        
-        results = []
-        for idx, row in hist.iterrows():
-            ts = idx.strftime("%Y-%m-%dT%H:%M:%S")
-            save_price(
-                ticker=ticker,
-                timestamp=ts,
-                open_=round(row['Open'], 2),
-                high=round(row['High'], 2),
-                low=round(row['Low'], 2),
-                close=round(row['Close'], 2),
-                volume=int(row['Volume']),
-                source="yfinance"
-            )
-            results.append({
-                "timestamp": ts,
-                "open": round(row['Open'], 2),
-                "high": round(row['High'], 2),
-                "low": round(row['Low'], 2),
-                "close": round(row['Close'], 2),
-                "volume": int(row['Volume']),
-            })
-        
-        latest = results[-1] if results else None
-        print(f"  💰 Price [{ticker}]: ${latest['close']:.2f} | Vol: {latest['volume']:,}")
-        
-        # 가격 변동률 계산
-        change_pct = 0.0
-        volume_ratio = 1.0
-        if len(results) >= 2:
-            prev_close = results[-2]['close']
-            if prev_close > 0:
-                change_pct = ((latest['close'] - prev_close) / prev_close) * 100
-            # 평균 거래량 대비 비율
-            avg_vol = sum(r['volume'] for r in results[:-1]) / len(results[:-1])
-            if avg_vol > 0:
-                volume_ratio = latest['volume'] / avg_vol
-            print(f"  📈 Change: {change_pct:+.1f}% | Volume: {volume_ratio:.1f}x avg")
-        
-        return {
-            "ticker": ticker,
-            "latest": latest,
-            "history": results,
+
+        today = hist.iloc[-1]
+        yesterday = hist.iloc[-2]
+
+        close = today["Close"]
+        prev_close = yesterday["Close"]
+        change_pct = ((close - prev_close) / prev_close) * 100
+
+        # 거래량 비율 (평균 대비)
+        avg_vol = hist["Volume"].iloc[:-1].mean()
+        vol_ratio = today["Volume"] / avg_vol if avg_vol > 0 else 1.0
+
+        # ── 장중 반전 감지 ──
+        high = today["High"]
+        low = today["Low"]
+
+        # 전일 종가 기준 고가/저가 변동률
+        high_from_prev = ((high - prev_close) / prev_close) * 100
+        low_from_prev = ((low - prev_close) / prev_close) * 100
+        close_from_prev = change_pct
+
+        # 고점 대비 하락폭 (양수였다가 떨어진 경우)
+        drop_from_high = high_from_prev - close_from_prev
+        # 저점 대비 반등폭 (음수였다가 올라간 경우)
+        bounce_from_low = close_from_prev - low_from_prev
+
+        intraday_reversal = 0
+        reversal_detail = ""
+
+        # 고점 대비 급락: 고점이 양수이고 현재가가 많이 내려온 경우
+        if high_from_prev >= 1 and drop_from_high >= 3:
+            intraday_reversal = -drop_from_high
+            reversal_detail = f"고점 {high_from_prev:+.1f}% → 현재 {close_from_prev:+.1f}% (고점 대비 -{drop_from_high:.1f}%)"
+
+        # 저점 대비 급반등: 저점이 음수이고 현재가가 많이 올라온 경우
+        if low_from_prev <= -1 and bounce_from_low >= 3:
+            if abs(bounce_from_low) > abs(intraday_reversal):
+                intraday_reversal = bounce_from_low
+                reversal_detail = f"저점 {low_from_prev:+.1f}% → 현재 {close_from_prev:+.1f}% (저점 대비 +{bounce_from_low:.1f}%)"
+
+        result = {
+            "price": round(close, 2),
+            "prev_close": round(prev_close, 2),
             "change_pct": round(change_pct, 2),
-            "volume_ratio": round(volume_ratio, 2),
-            "source": "yfinance",
-        }
-    
-    except Exception as e:
-        print(f"  ⚠️ yfinance 수집 실패: {e}")
-        return None
-
-
-def collect_price_manual(ticker: str, close: float, volume: int = 0,
-                        open_: float = 0, high: float = 0, low: float = 0,
-                        timestamp: str = None) -> Dict:
-    """수동 가격 입력 (웹 검색 결과 등에서 파싱 후 사용)"""
-    ts = timestamp or datetime.utcnow().isoformat()
-    
-    save_price(
-        ticker=ticker,
-        timestamp=ts,
-        open_=open_ or close,
-        high=high or close,
-        low=low or close,
-        close=close,
-        volume=volume,
-        source="manual"
-    )
-    
-    print(f"  💰 Price [{ticker}] (manual): ${close:.2f}")
-    return {
-        "ticker": ticker,
-        "latest": {
-            "timestamp": ts,
-            "close": close,
-            "volume": volume,
-        },
-        "source": "manual",
-    }
-
-
-def get_price_change(ticker: str, periods: int = 2) -> Optional[Dict]:
-    """최근 가격 변동 계산"""
-    prices = get_recent_prices(ticker, limit=periods + 1)
-    
-    if len(prices) < 2:
-        return None
-    
-    latest = prices[0]
-    previous = prices[1]
-    
-    change = latest['close'] - previous['close']
-    change_pct = (change / previous['close']) * 100 if previous['close'] else 0
-    
-    # 거래량 비율 (최근 vs 이전)
-    vol_ratio = latest['volume'] / previous['volume'] if previous['volume'] else 0
-    
-    return {
-        "ticker": ticker,
-        "latest_close": latest['close'],
-        "previous_close": previous['close'],
-        "change": round(change, 2),
-        "change_pct": round(change_pct, 2),
-        "latest_volume": latest['volume'],
-        "volume_ratio": round(vol_ratio, 2),
-        "timestamp": latest['timestamp'],
-    }
-
-
-def get_avg_volume(ticker: str, days: int = 20) -> int:
-    """N일 평균 거래량"""
-    prices = get_recent_prices(ticker, limit=days)
-    if not prices:
-        return 0
-    volumes = [p['volume'] for p in prices if p['volume']]
-    return int(sum(volumes) / len(volumes)) if volumes else 0
-
-
-def check_price_trigger(ticker: str) -> Optional[Dict]:
-    """가격 급변 트리거 확인"""
-    from config.settings import (
-        TRIGGER_PRICE_CHANGE_5MIN, 
-        TRIGGER_VOLUME_RATIO,
-        TRIGGER_PREMARKET_CHANGE
-    )
-    
-    change_info = get_price_change(ticker)
-    if not change_info:
-        return None
-    
-    avg_vol = get_avg_volume(ticker)
-    vol_ratio = change_info['latest_volume'] / avg_vol if avg_vol else 0
-    
-    triggers = []
-    
-    # 가격 변동 체크
-    if abs(change_info['change_pct']) >= TRIGGER_PRICE_CHANGE_5MIN:
-        triggers.append({
-            "type": "price_change",
-            "detail": f"{change_info['change_pct']:+.2f}% (임계치: ±{TRIGGER_PRICE_CHANGE_5MIN}%)",
-            "severity": "high" if abs(change_info['change_pct']) >= 5 else "medium",
-        })
-    
-    # 거래량 폭증 체크
-    if vol_ratio >= TRIGGER_VOLUME_RATIO:
-        triggers.append({
-            "type": "volume_surge",
-            "detail": f"거래량 {vol_ratio:.1f}배 (임계치: {TRIGGER_VOLUME_RATIO}배)",
-            "severity": "high" if vol_ratio >= 5 else "medium",
-        })
-    
-    if triggers:
-        return {
-            "ticker": ticker,
-            "triggered": True,
-            "triggers": triggers,
-            "price_info": change_info,
-            "avg_volume_20d": avg_vol,
+            "volume": int(today["Volume"]),
             "volume_ratio": round(vol_ratio, 2),
+            "high": round(high, 2),
+            "low": round(low, 2),
+            "intraday_reversal": round(intraday_reversal, 2),
+            "reversal_detail": reversal_detail,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
-    
-    return None
+
+        print(f"  💰 ${close:.2f} ({change_pct:+.1f}%) vol:{vol_ratio:.1f}x", end="")
+        if abs(intraday_reversal) >= 3:
+            print(f" 🔄반전:{intraday_reversal:+.1f}%", end="")
+        print()
+
+        return result
+
+    except Exception as e:
+        print(f"  ⚠️ yfinance 오류 ({ticker}): {e}")
+        return None
 
 
-# ============================================================
-# 관련 종목 수집
-# ============================================================
+def check_price_trigger(ticker: str) -> dict:
+    """가격 급변 트리거 (±3% 이상)"""
+    price_data = collect_price_yfinance(ticker)
+    if not price_data:
+        return {"triggered": False}
 
-def collect_related_prices(ticker: str) -> List[Dict]:
-    """관련 종목 가격 수집"""
-    watch = None
-    try:
-        from config.settings import WATCHMAP
-        watch = WATCHMAP.get(ticker)
-    except:
-        pass
-    
-    if not watch or not watch.related:
-        return []
-    
-    results = []
-    for rel_ticker in watch.related:
-        data = collect_price_yfinance(rel_ticker)
-        if data:
-            results.append(data)
-    
-    return results
+    triggers = []
+    change = price_data["change_pct"]
+    vol_ratio = price_data["volume_ratio"]
+    reversal = price_data.get("intraday_reversal", 0)
 
+    if abs(change) >= 3:
+        direction = "급등" if change > 0 else "급락"
+        triggers.append({
+            "type": "price_move",
+            "detail": f"{direction} {change:+.1f}% (거래량 {vol_ratio:.1f}x)",
+        })
 
-# ============================================================
-# 테스트
-# ============================================================
-if __name__ == "__main__":
-    from storage.database import init_db
-    init_db()
-    
-    # 수동 입력 테스트 (웹 검색 결과 기반)
-    collect_price_manual("AMAT", close=369.31, open_=361.50, high=372.50, 
-                        low=361.50, volume=6879498,
-                        timestamp="2026-02-13T16:00:00")
-    collect_price_manual("AMAT", close=328.39, open_=327.00, high=332.00,
-                        low=325.00, volume=8414305,
-                        timestamp="2026-02-12T16:00:00")
-    
-    change = get_price_change("AMAT")
-    if change:
-        print(f"\n  변동: {change['change_pct']:+.2f}%")
-        print(f"  거래량 비율: {change['volume_ratio']:.2f}x")
+    if abs(reversal) >= 3:
+        direction = "급락 반전" if reversal < 0 else "급등 반전"
+        triggers.append({
+            "type": "intraday_reversal",
+            "detail": f"장중 {direction} {reversal:+.1f}%: {price_data.get('reversal_detail', '')}",
+        })
+
+    if vol_ratio >= 3 and abs(change) >= 1:
+        triggers.append({
+            "type": "volume_spike",
+            "detail": f"거래량 {vol_ratio:.1f}x (변동 {change:+.1f}%)",
+        })
+
+    return {
+        "triggered": len(triggers) > 0,
+        "triggers": triggers,
+        "price_data": price_data,
+    }

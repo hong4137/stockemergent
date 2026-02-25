@@ -1,6 +1,6 @@
 """
 Stock Sentinel — Alert System v3
-AI 분류 → 플레이북 연동 + 전체 한글화
+AI 분류 → 플레이북 연동 + 전체 한글화 + 단계별 임계치 + 장중 반전
 """
 import json
 from datetime import datetime, timedelta
@@ -13,7 +13,10 @@ from config.settings import (
     TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
     ALERT_COOLDOWN_MINUTES, NOISE_ALERTS_MAX_PER_DAY,
 )
-from storage.database import save_alert
+from storage.database import (
+    save_alert, get_last_alert_time, get_last_alert_psi,
+    count_noise_alerts_today,
+)
 
 
 # ── 한글 매핑 ──
@@ -55,6 +58,21 @@ PLAYBOOKS = {
     },
 }
 
+# ── 단계별 알림 임계치 ──
+# 1차: ±3% → 2차: ±5% → 3차: ±8% → 4차: ±12%
+PRICE_ALERT_LEVELS = [3, 5, 8, 12]
+
+
+def _get_current_level(abs_move: float) -> int:
+    """현재 가격 변동이 몇 단계 임계치에 해당하는지"""
+    level = 0
+    for threshold in PRICE_ALERT_LEVELS:
+        if abs_move >= threshold:
+            level += 1
+        else:
+            break
+    return level
+
 
 # ── 유틸 ──
 
@@ -62,10 +80,10 @@ def _is_article_url(url: str) -> bool:
     """실제 기사 URL인지 검증"""
     if not url:
         return False
-    bad = ['news.google.com/rss', 'finnhub.io/api']
+    bad = ["news.google.com/rss", "finnhub.io/api"]
     if any(p in url for p in bad):
         return False
-    path = urlparse(url).path.strip('/')
+    path = urlparse(url).path.strip("/")
     if not path or len(path) < 3:
         return False
     return True
@@ -76,126 +94,126 @@ def generate_alert_id(ticker: str) -> str:
     return f"SEN-{now.strftime('%Y%m%d')}-{ticker}-{now.strftime('%H%M%S')}"
 
 
-# ── 단계별 알림 임계치 ──
-# 한 번 알림을 보낸 후, 다음 단계를 넘어야 추가 알림
-PRICE_ALERT_LEVELS = [3, 5, 8, 12]  # ±3%, ±5%, ±8%, ±12%
-
-
-def _get_current_level(change_pct: float) -> int:
-    """현재 가격 변동이 몇 번째 단계인지"""
-    abs_change = abs(change_pct)
-    level = 0
-    for threshold in PRICE_ALERT_LEVELS:
-        if abs_change >= threshold:
-            level += 1
-        else:
-            break
-    return level
-
-
-def should_send_alert(ticker: str, classification: str,
-                      change_pct: float = 0) -> bool:
+def should_send_alert(
+    ticker: str,
+    classification: str,
+    change_pct: float = 0,
+    intraday_reversal: float = 0,
+) -> bool:
     """
-    알림 발송 여부 결정
-    - 단계별 임계치: 3% → 5% → 8% → 12% 돌파 시에만 추가 알림
-    - 새로운 분류(Catalyst↔Fracture 전환) 시에도 알림
-    - Noise 일일 제한
+    단계별 알림 임계치 + 장중 반전 감지
+    - 3% → 5% → 8% → 12% 단계적 알림
+    - 같은 단계 내에서는 중복 알림 차단
+    - 장중 반전 3%+ 이면 별도 알림
     """
-    from storage.database import get_last_alert_time, get_last_alert_psi, count_noise_alerts_today
+    last_time = get_last_alert_time(ticker)
+    hours_since = 999  # 기본: 항상 통과
 
-    # Noise 일일 제한
+    if last_time:
+        try:
+            last_dt = datetime.fromisoformat(last_time)
+            diff = datetime.utcnow() - last_dt
+            hours_since = diff.total_seconds() / 3600
+
+            # 최소 쿨다운: 10분
+            if hours_since < (10 / 60):
+                print(f"  ⏳ 최소 쿨다운 10분 ({ticker})")
+                return False
+        except:
+            pass
+
+    # 6시간 이상 지나면 리셋 (새 세션)
+    if hours_since >= 6:
+        print(f"  ✅ 6시간+ 경과, 리셋")
+        return True
+
+    # 가격 변동 기반 단계 판단
+    effective_move = max(abs(change_pct), abs(intraday_reversal))
+    current_level = _get_current_level(effective_move)
+
+    # 이전 알림의 PSI에서 레벨 추출 (DB에서)
+    last_psi_data = get_last_alert_psi(ticker)
+    prev_level = 0
+    if last_psi_data:
+        prev_change = abs(last_psi_data.get("change_pct", 0))
+        prev_level = _get_current_level(prev_change)
+
+    # 장중 반전 3%+ 이고 15분+ 경과 → 별도 알림
+    if abs(intraday_reversal) >= 3 and hours_since >= 0.25:
+        print(f"  🔄 장중 반전 알림 ({intraday_reversal:+.1f}%)")
+        return True
+
+    # 새로운 단계 돌파 시 알림
+    if current_level > prev_level:
+        threshold = PRICE_ALERT_LEVELS[current_level - 1] if current_level > 0 else 0
+        print(f"  📊 레벨 상승: {prev_level}→{current_level} ({threshold}%+ 돌파)")
+        return True
+
+    # 8%+ (레벨3) 이면 15분 간격으로 허용
+    if current_level >= 3 and hours_since >= 0.25:
+        print(f"  🚨 고변동 구간 ({effective_move:.1f}%), 15분 경과")
+        return True
+
+    # Noise 일일 한도
     if classification in ("Noise", "노이즈"):
         noise_count = count_noise_alerts_today(ticker)
         if noise_count >= NOISE_ALERTS_MAX_PER_DAY:
             print(f"  🔇 노이즈 일일 한도 초과")
             return False
 
-    # 최근 알림 확인
-    last_time = get_last_alert_time(ticker)
-    if not last_time:
-        return True  # 첫 알림은 무조건 발송
-
-    try:
-        last_dt = datetime.fromisoformat(last_time)
-        hours_since = (datetime.utcnow() - last_dt).total_seconds() / 3600
-
-        # 6시간 이상 지났으면 리셋 (새 세션)
-        if hours_since >= 6:
-            return True
-
-        # 10분 이내면 무조건 차단 (최소 쿨다운)
-        if hours_since < 10 / 60:
-            print(f"  ⏳ 최소 쿨다운 ({ticker})")
-            return False
-
-    except:
-        return True
-
-    # 단계별 임계치 체크
-    if abs(change_pct) >= PRICE_ALERT_LEVELS[0]:
-        current_level = _get_current_level(change_pct)
-        last_psi = get_last_alert_psi(ticker)
-
-        # 마지막 알림 PSI에서 추정한 이전 레벨
-        # PSI와 가격은 비례하지 않지만, DB에 가격 변동을 직접 저장하지 않으므로
-        # 간단히: 같은 레벨이면 차단, 더 높은 레벨이면 통과
-        # 이전 알림의 가격 변동을 알 수 없으므로, 시간 + PSI 변화로 판단
-        psi_jump = abs(change_pct) - abs(last_psi)  # 대략적 비교
-
-        if current_level >= 2 and hours_since >= 0.25:  # 5%+ 이고 15분 이상
-            print(f"  📈 단계 상승 알림 (레벨 {current_level})")
-            return True
-        elif current_level >= 3:  # 8%+ 이면 무조건
-            return True
-
-    # 기본: 30분 쿨다운
-    try:
-        last_dt = datetime.fromisoformat(last_time)
-        if datetime.utcnow() - last_dt < timedelta(minutes=ALERT_COOLDOWN_MINUTES):
-            print(f"  ⏳ 쿨다운 중 ({ticker})")
-            return False
-    except:
-        pass
+    # 같은 단계 내 중복 차단
+    if current_level <= prev_level and hours_since < 6:
+        print(f"  ⏳ 같은 단계 ({current_level}), 쿨다운 중")
+        return False
 
     return True
 
 
 # ── 알림 포맷 ──
 
-def format_telegram_alert(ticker: str, psi_result: Dict, flash_result: Dict,
-                          ai_summary: Dict = None) -> str:
+def format_telegram_alert(
+    ticker: str,
+    psi_result: Dict,
+    flash_result: Dict,
+    ai_summary: Dict = None,
+    price_data: Dict = None,
+) -> str:
     """Telegram 알림 — AI 분류 기반, 전체 한글"""
-    psi = psi_result.get('psi_total', 0)
-    level = psi_result.get('level', 'unknown')
-    details = psi_result.get('details', {})
-    candidates = flash_result.get('reason_candidates', [])
-    rule_cls = flash_result.get('classification', {})
+    psi = psi_result.get("psi_total", 0)
+    details = psi_result.get("details", {})
+    candidates = flash_result.get("reason_candidates", [])
+    rule_cls = flash_result.get("classification", {})
 
     # ── 분류 결정: AI 우선, 폴백은 규칙 기반 ──
-    if ai_summary and ai_summary.get('ai_generated'):
-        cls_type = ai_summary.get('classification', 'Noise')
-        confidence = ai_summary.get('confidence', 0.5)
-        headline = ai_summary.get('headline', '')
-        detail_text = ai_summary.get('detail', '')
+    if ai_summary and ai_summary.get("ai_generated"):
+        cls_type = ai_summary.get("classification", "Noise")
+        confidence = ai_summary.get("confidence", 0.5)
+        headline = ai_summary.get("headline", "")
+        detail_text = ai_summary.get("detail", "")
     else:
-        cls_type = rule_cls.get('type', 'Noise')
-        confidence = rule_cls.get('confidence', 0.5)
-        headline = candidates[0].get('title', '')[:40] if candidates else ''
-        detail_text = rule_cls.get('reasoning', '')
+        cls_type = rule_cls.get("type", "Noise")
+        confidence = rule_cls.get("confidence", 0.5)
+        headline = candidates[0].get("title", "")[:40] if candidates else ""
+        detail_text = rule_cls.get("reasoning", "")
 
-    # 분류를 한글로
     cls_kr = CLS_KR.get(cls_type, cls_type)
-    cls_emoji = CLS_EMOJI.get(cls_type, '❓')
-
-    # ── 플레이북: AI 분류 기반 ──
+    cls_emoji = CLS_EMOJI.get(cls_type, "❓")
     playbook = PLAYBOOKS.get(cls_type, PLAYBOOKS["Noise"])
 
-    # 가격 변동
+    # 가격 변동 표시
     price_line = ""
-    pf = details.get('price_boost', {}).get('factors', [])
-    if pf:
-        pct = pf[0].split('→')[0].replace('가격 변동', '').strip()
-        price_line = pct
+    if price_data:
+        pct = price_data.get("change_pct", 0)
+        rev = price_data.get("intraday_reversal", 0)
+        if abs(rev) >= 3 and abs(rev) > abs(pct):
+            price_line = f"장중 {rev:+.1f}%"
+        elif abs(pct) >= 0.5:
+            price_line = f"{pct:+.1f}%"
+    else:
+        pf = details.get("price_boost", {}).get("factors", [])
+        if pf:
+            pct = pf[0].split("→")[0].replace("가격 변동", "").strip()
+            price_line = pct
 
     # ── 메시지 조립 ──
     header = f"{cls_emoji} *{ticker}*"
@@ -214,17 +232,21 @@ def format_telegram_alert(ticker: str, psi_result: Dict, flash_result: Dict,
     msg += f"{cls_emoji} {cls_kr} ({confidence:.0%}) | PSI {psi:.1f}\n"
 
     # 소스 수
-    src_count = ai_summary.get('source_count', len(candidates)) if ai_summary else len(candidates)
+    src_count = (
+        ai_summary.get("source_count", len(candidates))
+        if ai_summary
+        else len(candidates)
+    )
     if src_count:
         msg += f"📰 {src_count}개 매체\n"
 
     # 링크 (유효한 것 1개만)
     key_url = ""
-    if ai_summary and ai_summary.get('key_source'):
-        key_url = ai_summary['key_source']
+    if ai_summary and ai_summary.get("key_source"):
+        key_url = ai_summary["key_source"]
     if not key_url:
         for c in candidates:
-            u = c.get('source_url', '')
+            u = c.get("source_url", "")
             if _is_article_url(u):
                 key_url = u
                 break
@@ -233,7 +255,7 @@ def format_telegram_alert(ticker: str, psi_result: Dict, flash_result: Dict,
 
     # 플레이북 (AI 분류 기반)
     msg += f"\n📖 *{playbook['id']}*\n"
-    for a in playbook['actions']:
+    for a in playbook["actions"]:
         msg += f"  ▸ {a}\n"
 
     msg += f"\n🕐 {datetime.utcnow().strftime('%H:%M UTC')}"
@@ -242,42 +264,50 @@ def format_telegram_alert(ticker: str, psi_result: Dict, flash_result: Dict,
 
 # ── 발송 ──
 
-def send_alert(ticker: str, psi_result: Dict, flash_result: Dict,
-               trigger_type: str = "psi_critical",
-               news_data: List[Dict] = None,
-               price_data: Dict = None,
-               force: bool = False) -> bool:
+def send_alert(
+    ticker: str,
+    psi_result: Dict,
+    flash_result: Dict,
+    trigger_type: str = "psi_critical",
+    news_data: List[Dict] = None,
+    price_data: Dict = None,
+    force: bool = False,
+) -> bool:
     """알림 생성 + AI 요약 + 발송"""
-    classification = flash_result.get('classification', {})
-    cls_type = classification.get('type', 'Unknown')
+    classification = flash_result.get("classification", {})
+    cls_type = classification.get("type", "Unknown")
 
     # AI 요약 시도
     ai_summary = None
     try:
         from engines.ai_summarizer import summarize_event
+
         if news_data:
             ai_summary = summarize_event(ticker, news_data, price_data)
-            if ai_summary and ai_summary.get('ai_generated'):
-                cls_type = ai_summary.get('classification', cls_type)
+            if ai_summary and ai_summary.get("ai_generated"):
+                cls_type = ai_summary.get("classification", cls_type)
     except Exception as e:
         print(f"  ⚠️ AI 요약 실패: {e}")
 
     # 가격 변동률 추출
     change_pct = 0
+    intraday_reversal = 0
     if price_data:
-        change_pct = price_data.get('change_pct', 0)
+        change_pct = price_data.get("change_pct", 0)
+        intraday_reversal = price_data.get("intraday_reversal", 0)
 
     # 발송 여부 (force면 무조건 발송)
-    if not force and not should_send_alert(ticker, cls_type, change_pct):
+    if not force and not should_send_alert(ticker, cls_type, change_pct, intraday_reversal):
         return False
 
     # Telegram 발송
     sent_via = "console"
-    tg_msg = format_telegram_alert(ticker, psi_result, flash_result, ai_summary)
+    tg_msg = format_telegram_alert(ticker, psi_result, flash_result, ai_summary, price_data)
     print(tg_msg)
 
     try:
         from alerts.telegram import send_telegram
+
         if send_telegram(tg_msg):
             sent_via = "both"
     except Exception as e:
@@ -290,13 +320,14 @@ def send_alert(ticker: str, psi_result: Dict, flash_result: Dict,
         ticker=ticker,
         timestamp=datetime.utcnow().isoformat(),
         trigger_type=trigger_type,
-        psi_total=psi_result.get('psi_total', 0),
+        psi_total=psi_result.get("psi_total", 0),
         classification=cls_type,
-        confidence=classification.get('confidence', 0),
-        reason_candidates=flash_result.get('reason_candidates', []),
-        playbook_id=PLAYBOOKS.get(cls_type, PLAYBOOKS["Noise"])['id'],
-        playbook_actions=PLAYBOOKS.get(cls_type, PLAYBOOKS["Noise"])['actions'],
+        confidence=classification.get("confidence", 0),
+        reason_candidates=flash_result.get("reason_candidates", []),
+        playbook_id=PLAYBOOKS.get(cls_type, PLAYBOOKS["Noise"])["id"],
+        playbook_actions=PLAYBOOKS.get(cls_type, PLAYBOOKS["Noise"])["actions"],
         sent_via=sent_via,
+        change_pct=change_pct,
     )
 
     print(f"  💾 Alert: {alert_id}")

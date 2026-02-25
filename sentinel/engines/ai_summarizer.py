@@ -1,172 +1,179 @@
 """
-Stock Sentinel — AI 요약 엔진 v2
-환각 방지: 수집된 뉴스에 언급된 팩트만 사용, 추측/일반론 금지
+Stock Sentinel — AI Summarizer
+OpenAI gpt-4.1-mini 기반 한국어 요약 엔진
 """
 import os
 import json
-import requests
 from typing import Dict, List, Optional
 from urllib.parse import urlparse
 
+
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
-MODEL = "gpt-4.1-mini"
 
 
 def _is_valid_article_url(url: str) -> bool:
+    """실제 기사 URL인지 검증"""
     if not url:
         return False
-    bad = ["news.google.com/rss", "finnhub.io/api"]
+    bad = ["news.google.com/rss", "finnhub.io/api", "googleapis.com"]
     if any(p in url for p in bad):
         return False
-    try:
-        path = urlparse(url).path.strip("/")
-        return bool(path) and len(path) >= 3
-    except:
+    path = urlparse(url).path.strip("/")
+    if not path or len(path) < 3:
         return False
+    return True
 
 
-def summarize_event(ticker: str, news_data: List[Dict], price_data: Dict = None) -> Dict:
-    """
-    뉴스 + 가격 → 한국어 요약.
-    핵심 원칙: 수집된 뉴스에 있는 정보만 사용. 추측/일반론 절대 금지.
-    """
+def summarize_event(
+    ticker: str,
+    news_data: List[Dict],
+    price_data: Dict = None,
+) -> Optional[Dict]:
+    """뉴스 + 가격 → 한국어 2줄 요약 (OpenAI)"""
     if not OPENAI_API_KEY:
+        print("  ⚠️ OPENAI_API_KEY 없음 → 규칙 기반 폴백")
         return _fallback_summary(ticker, news_data, price_data)
 
-    # 뉴스 텍스트 (최대 10건)
-    news_text = ""
-    sources = []
-    for i, article in enumerate(news_data[:10]):
-        title = article.get("title", "").strip()
-        summary = article.get("summary", "").strip()[:200]
-        source = article.get("source", "")
-        url = article.get("url", "")
-        sentiment = article.get("sentiment", "")
+    try:
+        import httpx
 
-        news_text += f"[{i+1}] {title}\n"
-        if summary:
-            news_text += f"    {summary}\n"
-        news_text += f"    출처: {source} | 센티멘트: {sentiment}\n\n"
+        # 뉴스 상위 10건 정리
+        news_text = ""
+        valid_urls = []
+        for i, n in enumerate(news_data[:10]):
+            title = n.get("title", n.get("headline", ""))
+            source = n.get("source", "")
+            url = n.get("url", n.get("source_url", ""))
+            summary = n.get("summary", "")[:100]
+            news_text += f"{i+1}. [{source}] {title}"
+            if summary:
+                news_text += f" — {summary}"
+            news_text += "\n"
+            if _is_valid_article_url(url):
+                valid_urls.append(url)
 
-        if url and _is_valid_article_url(url):
-            sources.append(url)
+        # 가격 정보
+        price_text = ""
+        if price_data:
+            pct = price_data.get("change_pct", 0)
+            vol = price_data.get("volume_ratio", 1)
+            rev = price_data.get("intraday_reversal", 0)
+            price_text = f"전일 대비: {pct:+.1f}%, 거래량 비율: {vol:.1f}x"
+            if abs(rev) >= 2:
+                price_text += f", 장중 반전: {rev:+.1f}%"
 
-    # 가격 정보
-    price_info = ""
-    if price_data:
-        change = price_data.get("change_pct", 0)
-        vol = price_data.get("volume_ratio", 1.0)
-        latest = price_data.get("latest", {})
-        close = latest.get("close", 0) if latest else 0
-        direction = "상승" if change > 0 else "하락" if change < 0 else "보합"
-        price_info = f"현재가: ${close:.2f} | 변동: {change:+.1f}% ({direction}) | 거래량: 평균 대비 {vol:.1f}배"
+        prompt = f"""당신은 주식 시장 분석가입니다.
+{ticker} 관련 뉴스와 가격 데이터를 분석하여 JSON으로만 답하세요.
 
-    # ═══ 환각 방지 프롬프트 ═══
-    prompt = f"""아래 {ticker} 관련 뉴스를 분석하여 JSON으로 답하세요.
-
-## 절대 규칙
-1. headline과 detail은 반드시 아래 뉴스 목록에 나온 정보만 사용할 것
-2. 뉴스에 없는 추측, 전망, 일반론 절대 금지 (예: "AI 수요 확대", "시장 성장 전망" 등 삽입 금지)
-3. 어떤 뉴스가 가장 직접적인 원인인지 번호로 명시할 것
-4. 뉴스에서 구체적 원인을 찾을 수 없으면 headline을 "원인 미확인 — 추가 확인 필요"로 작성
-
-## 가격 데이터
-{price_info or "없음"}
-
-## 최근 뉴스
+뉴스:
 {news_text}
 
-## JSON 형식 (다른 텍스트 없이 JSON만):
-{{
-  "headline": "뉴스에서 확인된 핵심 원인 한 줄 (한국어, 25자 이내)",
-  "detail": "해당 뉴스의 구체적 내용 1문장 (한국어, 뉴스 원문 기반만)",
-  "classification": "Catalyst / Fracture / Noise",
-  "confidence": 0.0~1.0,
-  "event_type": "earnings/guidance/partnership/ma/regulatory/analyst/sector/macro/other",
-  "primary_source_index": 가장 핵심 뉴스 번호 (정수)
-}}"""
+가격: {price_text}
 
-    try:
-        resp = requests.post(
+JSON 형식:
+{{
+  "headline": "핵심 이유 한 줄 (한국어, 20자 이내)",
+  "detail": "부연 설명 1~2문장 (배경/맥락 포함, 한국어)",
+  "classification": "Catalyst 또는 Fracture 또는 Noise",
+  "confidence": 0.0~1.0,
+  "event_type": "earnings/partnership/regulatory/macro/analyst/product/restructuring/other"
+}}
+
+JSON만 출력하고 다른 텍스트는 쓰지 마세요."""
+
+        response = httpx.post(
             "https://api.openai.com/v1/chat/completions",
             headers={
                 "Authorization": f"Bearer {OPENAI_API_KEY}",
                 "Content-Type": "application/json",
             },
             json={
-                "model": MODEL,
+                "model": "gpt-4.1-mini",
                 "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.1,  # 더 낮춰서 창작 억제
-                "max_tokens": 250,
+                "max_tokens": 300,
+                "temperature": 0.3,
             },
             timeout=15,
         )
 
-        if resp.status_code != 200:
-            print(f"  ⚠️ OpenAI API 오류 {resp.status_code}: {resp.text[:200]}")
+        if response.status_code != 200:
+            print(f"  ⚠️ OpenAI API 오류 {response.status_code}")
             return _fallback_summary(ticker, news_data, price_data)
 
-        content = resp.json()["choices"][0]["message"]["content"].strip()
+        content = response.json()["choices"][0]["message"]["content"].strip()
+
+        # JSON 파싱 (```json ``` 래핑 제거)
         if content.startswith("```"):
-            content = content.split("\n", 1)[1].rsplit("```", 1)[0]
+            content = content.split("\n", 1)[-1]
+        if content.endswith("```"):
+            content = content.rsplit("```", 1)[0]
+        content = content.strip()
 
         result = json.loads(content)
-        result["source_count"] = len(news_data)
-        result["key_source"] = sources[0] if sources else ""
         result["ai_generated"] = True
+        result["source_count"] = len(news_data)
+        result["key_source"] = valid_urls[0] if valid_urls else ""
 
-        # primary_source_index로 key_source 보정
-        psi = result.get("primary_source_index")
-        if isinstance(psi, int) and 1 <= psi <= len(news_data):
-            candidate_url = news_data[psi - 1].get("url", "")
-            if _is_valid_article_url(candidate_url):
-                result["key_source"] = candidate_url
+        cls = result.get("classification", "Noise")
+        conf = result.get("confidence", 0.5)
+        print(f"  🤖 AI: {result.get('headline', '')} [{cls} {conf:.0%}]")
 
-        print(f"  🤖 AI 요약: {result.get('headline', '?')}")
         return result
 
-    except json.JSONDecodeError as e:
-        print(f"  ⚠️ AI JSON 파싱 실패: {e}")
-        return _fallback_summary(ticker, news_data, price_data)
     except Exception as e:
-        print(f"  ⚠️ OpenAI 요약 실패: {e}")
+        print(f"  ⚠️ AI 요약 오류: {e}")
         return _fallback_summary(ticker, news_data, price_data)
 
 
-def _fallback_summary(ticker: str, news_data: List[Dict], price_data: Dict = None) -> Dict:
-    """AI 없이 규칙 기반 폴백 — 뉴스 제목 그대로 사용"""
-    headline = ""
-    event_type = "other"
+def _fallback_summary(
+    ticker: str, news_data: List[Dict], price_data: Dict = None
+) -> Dict:
+    """AI 실패 시 규칙 기반 폴백"""
+    headline = "주요 신호 발생"
+    detail = ""
     classification = "Noise"
-
-    if news_data:
-        top = news_data[0]
-        headline = top.get("title", "")[:45]
-
-        title_lower = headline.lower()
-        if any(w in title_lower for w in ["earnings", "eps", "revenue", "quarter"]):
-            event_type = "earnings"
-        elif any(w in title_lower for w in ["deal", "partner", "contract"]):
-            event_type = "partnership"
-        elif any(w in title_lower for w in ["upgrade", "downgrade", "target", "rating"]):
-            event_type = "analyst"
-        elif any(w in title_lower for w in ["bis", "fda", "sec", "sanction", "export"]):
-            event_type = "regulatory"
+    confidence = 0.5
 
     if price_data:
-        change = price_data.get("change_pct", 0)
-        if change >= 2:
-            classification = "Catalyst"
-        elif change <= -2:
-            classification = "Fracture"
+        pct = price_data.get("change_pct", 0)
+        rev = price_data.get("intraday_reversal", 0)
+
+        if abs(pct) >= 3:
+            direction = "상승" if pct > 0 else "하락"
+            headline = f"주가 {abs(pct):.1f}% {direction}"
+            classification = "Catalyst" if pct > 0 else "Fracture"
+            confidence = min(0.6 + abs(pct) / 20, 0.9)
+
+        if abs(rev) >= 3 and abs(rev) > abs(pct):
+            if rev < 0:
+                headline = f"장중 고점 대비 {abs(rev):.1f}% 급락"
+                classification = "Fracture"
+            else:
+                headline = f"장중 저점 대비 {abs(rev):.1f}% 급반등"
+                classification = "Catalyst"
+            confidence = min(0.6 + abs(rev) / 20, 0.9)
+
+    if news_data:
+        first = news_data[0]
+        title = first.get("title", first.get("headline", ""))
+        if title and not detail:
+            detail = f"{ticker} 관련 {len(news_data)}건의 뉴스가 감지됨."
+
+    # 유효한 URL 찾기
+    key_source = ""
+    for n in news_data[:5]:
+        url = n.get("url", n.get("source_url", ""))
+        if _is_valid_article_url(url):
+            key_source = url
+            break
 
     return {
-        "headline": headline or f"{ticker} 시장 변동 — 원인 확인 필요",
-        "detail": "",
+        "headline": headline,
+        "detail": detail,
         "classification": classification,
-        "confidence": 0.5,
-        "event_type": event_type,
-        "source_count": len(news_data),
-        "key_source": "",
+        "confidence": confidence,
+        "event_type": "other",
         "ai_generated": False,
+        "source_count": len(news_data),
+        "key_source": key_source,
     }
