@@ -50,6 +50,21 @@ def init_db():
         )
     """)
 
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS news (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            timestamp TEXT,
+            title TEXT,
+            summary TEXT,
+            url TEXT,
+            source TEXT,
+            source_type TEXT,
+            sentiment TEXT,
+            keywords_matched TEXT
+        )
+    """)
+
     # change_pct 컬럼 추가 (기존 DB 마이그레이션)
     try:
         c.execute("ALTER TABLE alerts ADD COLUMN change_pct REAL DEFAULT 0")
@@ -106,6 +121,36 @@ def save_scan(
            (ticker, timestamp, psi_total, level, news_count, classification)
            VALUES (?, ?, ?, ?, ?, ?)""",
         (ticker, datetime.utcnow().isoformat(), psi_total, level, news_count, classification),
+    )
+    conn.commit()
+    conn.close()
+
+
+def save_news(
+    ticker: str,
+    timestamp: str,
+    title: str,
+    url: str,
+    summary: str = "",
+    source: str = "",
+    source_type: str = "news",
+    sentiment: str = "neutral",
+    keywords_matched: list = None,
+    **kwargs,
+):
+    """뉴스 기사 DB 저장"""
+    conn = _connect()
+    c = conn.cursor()
+    c.execute(
+        """INSERT INTO news
+           (ticker, timestamp, title, summary, url, source,
+            source_type, sentiment, keywords_matched)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            ticker, timestamp, title, summary, url, source,
+            source_type, sentiment,
+            json.dumps(keywords_matched or []),
+        ),
     )
     conn.commit()
     conn.close()

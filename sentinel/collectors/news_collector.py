@@ -16,7 +16,6 @@ from config.settings import (
     WATCHMAP, NEWS_RSS_FEEDS, FINNHUB_API_KEY,
     BREAKING_KEYWORDS, POSITIVE_KEYWORDS, NEGATIVE_KEYWORDS
 )
-from storage.database import save_news
 
 
 def collect_google_news(ticker: str, hours: int = 24) -> List[Dict]:
@@ -80,9 +79,6 @@ def collect_google_news(ticker: str, hours: int = 24) -> List[Dict]:
                     "keywords_matched": matched_keywords,
                 }
                 results.append(article)
-                
-                # DB 저장
-                save_news(**article)
                 
             time.sleep(1)  # Rate limit
             
@@ -152,7 +148,6 @@ def collect_finnhub_news(ticker: str, hours: int = 72) -> List[Dict]:
                 "keywords_matched": matched_keywords,
             }
             results.append(article)
-            save_news(**article)
         
         print(f"  📰 Finnhub [{ticker}]: {len(results)}건 수집")
         
@@ -202,7 +197,6 @@ def collect_sec_edgar(ticker: str, company_name: str = None) -> List[Dict]:
                     "keywords_matched": [source.get('form_type', '')],
                 }
                 results.append(filing)
-                save_news(**filing)
             
             print(f"  📋 SEC EDGAR [{ticker}]: {len(results)}건 수집")
         else:
