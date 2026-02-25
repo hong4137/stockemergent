@@ -21,6 +21,23 @@ def init_db():
     conn = _connect()
     c = conn.cursor()
 
+    # alerts 테이블 — 필요한 컬럼 체크 후 재생성
+    required_cols = {"alert_id", "ticker", "timestamp", "trigger_type", "psi_total",
+                     "classification", "confidence", "reason_candidates",
+                     "playbook_id", "playbook_actions", "sent_via", "change_pct"}
+
+    try:
+        c.execute("PRAGMA table_info(alerts)")
+        existing_cols = {row[1] for row in c.fetchall()}
+    except Exception:
+        existing_cols = set()
+
+    missing = required_cols - existing_cols
+    if missing and existing_cols:
+        # 컬럼 누락 — 테이블 DROP 후 재생성 (이력 초기화)
+        print(f"⚠️ alerts 테이블 마이그레이션: 누락 컬럼 {missing} → 재생성")
+        c.execute("DROP TABLE IF EXISTS alerts")
+
     c.execute("""
         CREATE TABLE IF NOT EXISTS alerts (
             alert_id TEXT PRIMARY KEY,
@@ -64,12 +81,6 @@ def init_db():
             keywords_matched TEXT
         )
     """)
-
-    # change_pct 컬럼 추가 (기존 DB 마이그레이션)
-    try:
-        c.execute("ALTER TABLE alerts ADD COLUMN change_pct REAL DEFAULT 0")
-    except sqlite3.OperationalError:
-        pass  # 이미 있음
 
     conn.commit()
     conn.close()
