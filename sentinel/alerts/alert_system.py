@@ -205,10 +205,11 @@ def format_telegram_alert(
     if price_data:
         pct = price_data.get("change_pct", 0)
         rev = price_data.get("intraday_reversal", 0)
-        if abs(rev) >= 3 and abs(rev) > abs(pct):
-            price_line = f"장중 {rev:+.1f}%"
-        elif abs(pct) >= 0.5:
+        if abs(pct) >= 0.5:
             price_line = f"{pct:+.1f}%"
+        if abs(rev) >= 3:
+            rev_dir = "고점대비" if rev < 0 else "저점대비"
+            price_line += f" ({rev_dir} {rev:+.1f}%)"
     else:
         pf = details.get("price_boost", {}).get("factors", [])
         if pf:
