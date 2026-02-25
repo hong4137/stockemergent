@@ -20,7 +20,7 @@ from alerts.telegram import send_telegram
 
 # 환경변수
 SCAN_MODE = os.environ.get("SCAN_MODE", "market_open")
-SCAN_TICKER = os.environ.get("SCAN_TICKER", "").strip()
+SCAN_TICKER = os.environ.get("SCAN_TICKER", "").upper().strip().strip()
 FORCE_ALERT = os.environ.get("FORCE_ALERT", "false") == "true"
 
 ET = timezone(timedelta(hours=-5))
