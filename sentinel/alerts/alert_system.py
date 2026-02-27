@@ -1,9 +1,10 @@
 """
-Stock Sentinel — Alert System v3
+Stock Sentinel — Alert System v3.1
 AI 분류 → 플레이북 연동 + 전체 한글화 + 단계별 임계치 + 장중 반전
+v3.1: 중복 알림 방지 강화
 """
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 from urllib.parse import urlparse
 
@@ -33,7 +34,6 @@ CLS_EMOJI = {
     "Noise": "⚠️",
 }
 
-# AI 분류 기반 플레이북 (한글)
 PLAYBOOKS = {
     "Catalyst": {
         "id": "호재 감지",
@@ -58,8 +58,7 @@ PLAYBOOKS = {
     },
 }
 
-# ── 단계별 알림 임계치 ──
-# 1차: ±3% → 2차: ±5% → 3차: ±8% → 4차: ±12%
+# 단계별 알림 임계치: ±3% → ±5% → ±8% → ±12%
 PRICE_ALERT_LEVELS = [3, 5, 8, 12]
 
 
@@ -74,10 +73,25 @@ def _get_current_level(abs_move: float) -> int:
     return level
 
 
+def _is_market_hours() -> bool:
+    """현재 미국 정규장 시간인지 (ET 09:30-16:00)"""
+    ET = timezone(timedelta(hours=-5))
+    now_et = datetime.now(ET)
+    weekday = now_et.weekday()  # 0=Mon, 6=Sun
+    if weekday >= 5:
+        return False
+    hour, minute = now_et.hour, now_et.minute
+    # 09:30 ~ 16:00 ET
+    if hour < 9 or (hour == 9 and minute < 30):
+        return False
+    if hour >= 16:
+        return False
+    return True
+
+
 # ── 유틸 ──
 
 def _is_article_url(url: str) -> bool:
-    """실제 기사 URL인지 검증"""
     if not url:
         return False
     bad = ["news.google.com/rss", "finnhub.io/api"]
@@ -101,13 +115,16 @@ def should_send_alert(
     intraday_reversal: float = 0,
 ) -> bool:
     """
-    단계별 알림 임계치 + 장중 반전 감지
-    - 3% → 5% → 8% → 12% 단계적 알림
-    - 같은 단계 내에서는 중복 알림 차단
-    - 장중 반전 3%+ 이면 별도 알림
+    v3.1 — 중복 알림 방지 강화
+    
+    핵심 규칙:
+    1. 정규장 외 시간: 가격 기반 알림 차단 (뉴스만 동작)
+    2. 같은 단계 내 쿨다운: 2시간 (기존 15분 → 강화)
+    3. 장중 반전: 최초 1회만 알림, 이후 새 단계 돌파 시에만
+    4. 최소 쿨다운: 15분 (기존 10분 → 강화)
     """
     last_time = get_last_alert_time(ticker)
-    hours_since = 999  # 기본: 항상 통과
+    hours_since = 999
 
     if last_time:
         try:
@@ -115,14 +132,21 @@ def should_send_alert(
             diff = datetime.utcnow() - last_dt
             hours_since = diff.total_seconds() / 3600
 
-            # 최소 쿨다운: 10분
-            if hours_since < (10 / 60):
-                print(f"  ⏳ 최소 쿨다운 10분 ({ticker})")
+            # 최소 쿨다운: 15분
+            if hours_since < 0.25:
+                print(f"  ⏳ 쿨다운 15분 미경과 ({ticker})")
                 return False
         except:
             pass
 
-    # 6시간 이상 지나면 리셋 (새 세션)
+    # ── 정규장 외 시간: 가격 기반 알림 차단 ──
+    if not _is_market_hours():
+        # 장 밖에서는 PSI 8+ Critical만 허용 (가격 변동 무시)
+        if abs(change_pct) < 5 and abs(intraday_reversal) < 5:
+            print(f"  🌙 장외 시간 — 가격 기반 알림 차단")
+            return False
+
+    # 6시간 이상 경과면 리셋
     if hours_since >= 6:
         print(f"  ✅ 6시간+ 경과, 리셋")
         return True
@@ -131,17 +155,31 @@ def should_send_alert(
     effective_move = max(abs(change_pct), abs(intraday_reversal))
     current_level = _get_current_level(effective_move)
 
-    # 이전 알림의 PSI에서 레벨 추출 (DB에서)
+    # 이전 알림의 레벨 + 반전 여부
     last_psi_data = get_last_alert_psi(ticker)
     prev_level = 0
+    prev_had_reversal = False
     if last_psi_data:
         prev_change = abs(last_psi_data.get("change_pct", 0))
         prev_level = _get_current_level(prev_change)
+        # 이전 알림에 반전이 있었는지 (change_pct에 반전값이 기록됨)
+        prev_cls = last_psi_data.get("classification", "")
+        prev_had_reversal = prev_change >= 3  # 이전에도 3%+ 움직임
 
-    # 장중 반전 3%+ 이고 15분+ 경과 → 별도 알림
-    if abs(intraday_reversal) >= 3 and hours_since >= 0.25:
-        print(f"  🔄 장중 반전 알림 ({intraday_reversal:+.1f}%)")
-        return True
+    # ── 장중 반전: 새 단계 돌파한 경우만 알림 ──
+    if abs(intraday_reversal) >= 3:
+        reversal_level = _get_current_level(abs(intraday_reversal))
+        if reversal_level > prev_level:
+            print(f"  🔄 반전 새 단계: {prev_level}→{reversal_level}")
+            return True
+        else:
+            # 같은 단계 반전 반복 → 차단
+            print(f"  ⏳ 반전 같은 단계 ({reversal_level}), 중복 차단")
+            # 2시간+ 경과 시에만 허용
+            if hours_since >= 2:
+                print(f"  ✅ 2시간+ 경과, 반전 재알림 허용")
+                return True
+            return False
 
     # 새로운 단계 돌파 시 알림
     if current_level > prev_level:
@@ -149,9 +187,9 @@ def should_send_alert(
         print(f"  📊 레벨 상승: {prev_level}→{current_level} ({threshold}%+ 돌파)")
         return True
 
-    # 8%+ (레벨3) 이면 15분 간격으로 허용
-    if current_level >= 3 and hours_since >= 0.25:
-        print(f"  🚨 고변동 구간 ({effective_move:.1f}%), 15분 경과")
+    # 8%+ (레벨3) 이면 30분 간격으로 허용 (기존 15분 → 강화)
+    if current_level >= 3 and hours_since >= 0.5:
+        print(f"  🚨 고변동 구간 ({effective_move:.1f}%), 30분 경과")
         return True
 
     # Noise 일일 한도
@@ -161,10 +199,11 @@ def should_send_alert(
             print(f"  🔇 노이즈 일일 한도 초과")
             return False
 
-    # 같은 단계 내 중복 차단
-    if current_level <= prev_level and hours_since < 6:
-        print(f"  ⏳ 같은 단계 ({current_level}), 쿨다운 중")
-        return False
+    # 같은 단계 내 중복 차단 (2시간 쿨다운)
+    if current_level <= prev_level:
+        if hours_since < 2:
+            print(f"  ⏳ 같은 단계 ({current_level}), 2시간 쿨다운")
+            return False
 
     return True
 
@@ -184,7 +223,7 @@ def format_telegram_alert(
     candidates = flash_result.get("reason_candidates", [])
     rule_cls = flash_result.get("classification", {})
 
-    # ── 분류 결정: AI 우선, 폴백은 규칙 기반 ──
+    # 분류 결정: AI 우선, 폴백은 규칙 기반
     if ai_summary and ai_summary.get("ai_generated"):
         cls_type = ai_summary.get("classification", "Noise")
         confidence = ai_summary.get("confidence", 0.5)
@@ -200,7 +239,7 @@ def format_telegram_alert(
     cls_emoji = CLS_EMOJI.get(cls_type, "❓")
     playbook = PLAYBOOKS.get(cls_type, PLAYBOOKS["Noise"])
 
-    # 가격 변동 표시
+    # 가격 변동 표시: 전일 대비 + 장중 반전
     price_line = ""
     if price_data:
         pct = price_data.get("change_pct", 0)
@@ -216,7 +255,7 @@ def format_telegram_alert(
             pct = pf[0].split("→")[0].replace("가격 변동", "").strip()
             price_line = pct
 
-    # ── 메시지 조립 ──
+    # 메시지 조립
     header = f"{cls_emoji} *{ticker}*"
     if price_line:
         header += f"  {price_line}"
@@ -241,7 +280,7 @@ def format_telegram_alert(
     if src_count:
         msg += f"📰 {src_count}개 매체\n"
 
-    # 링크 (유효한 것 1개만)
+    # 링크
     key_url = ""
     if ai_summary and ai_summary.get("key_source"):
         key_url = ai_summary["key_source"]
@@ -254,7 +293,7 @@ def format_telegram_alert(
     if key_url:
         msg += f"🔗 {key_url[:80]}\n"
 
-    # 플레이북 (AI 분류 기반)
+    # 플레이북
     msg += f"\n📖 *{playbook['id']}*\n"
     for a in playbook["actions"]:
         msg += f"  ▸ {a}\n"
