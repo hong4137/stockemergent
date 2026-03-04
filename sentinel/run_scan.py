@@ -90,20 +90,22 @@ def scan_single(ticker: str) -> dict:
             )
             log(f"  📤 알림 발송 시도")
 
-    # 5. 가격 트리거 독립 체크 (장중 반전 포함)
+    # 5. 가격 트리거 독립 체크 (장중에만 동작)
+    from alerts.alert_system import _is_market_hours
     reversal_triggered = False
-    if price_data and abs(price_data.get("intraday_reversal", 0)) >= 3:
+    if _is_market_hours() and price_data and abs(price_data.get("intraday_reversal", 0)) >= 3:
         reversal_triggered = True
         log(f"  🔄 장중 반전 감지: {price_data['intraday_reversal']:+.1f}%")
 
-    pt = check_price_trigger(ticker)
-    if (pt and pt.get("triggered") or reversal_triggered) and not flash_result:
-        flash_result = FlashReasonEngine(ticker).analyze(all_news, price_data)
-        trigger = "price_reversal" if reversal_triggered else "price_surge"
-        send_alert(
-            ticker, psi_result, flash_result, trigger,
-            news_data=all_news, price_data=price_data,
-        )
+    if _is_market_hours():
+        pt = check_price_trigger(ticker)
+        if (pt and pt.get("triggered") or reversal_triggered) and not flash_result:
+            flash_result = FlashReasonEngine(ticker).analyze(all_news, price_data)
+            trigger = "price_reversal" if reversal_triggered else "price_surge"
+            send_alert(
+                ticker, psi_result, flash_result, trigger,
+                news_data=all_news, price_data=price_data,
+            )
 
     return {
         "ticker": ticker,
