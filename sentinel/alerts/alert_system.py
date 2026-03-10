@@ -1,7 +1,7 @@
 """
-Stock Sentinel — Alert System v3.2
+Stock Sentinel — Alert System v3.1
 AI 분류 → 플레이북 연동 + 전체 한글화 + 단계별 임계치 + 장중 반전
-v3.2: 장외 시간 가격 기반 알림 완전 차단
+v3.1: 중복 알림 방지 강화
 """
 import json
 from datetime import datetime, timedelta, timezone
@@ -74,9 +74,13 @@ def _get_current_level(abs_move: float) -> int:
 
 
 def _is_market_hours() -> bool:
-    """현재 미국 정규장 시간인지 (ET 09:30-16:00)"""
-    ET = timezone(timedelta(hours=-5))
-    now_et = datetime.now(ET)
+    """현재 미국 정규장 시간인지 (ET 09:30-16:00, 서머타임 자동)"""
+    try:
+        from zoneinfo import ZoneInfo
+        now_et = datetime.now(ZoneInfo("America/New_York"))
+    except ImportError:
+        ET = timezone(timedelta(hours=-4))  # DST fallback
+        now_et = datetime.now(ET)
     weekday = now_et.weekday()  # 0=Mon, 6=Sun
     if weekday >= 5:
         return False
@@ -115,14 +119,13 @@ def should_send_alert(
     intraday_reversal: float = 0,
 ) -> bool:
     """
-    v3.2 — 장외 반복 알림 근절
+    v3.1 — 중복 알림 방지 강화
     
     핵심 규칙:
-    1. 정규장 외 시간: 가격 기반 알림 무조건 차단 (변동폭 무관)
+    1. 정규장 외 시간: 가격 기반 알림 차단 (뉴스만 동작)
     2. 같은 단계 내 쿨다운: 2시간 (기존 15분 → 강화)
     3. 장중 반전: 최초 1회만 알림, 이후 새 단계 돌파 시에만
-    4. 최소 쿨다운: 15분
-    5. 6시간 리셋도 정규장 시간에만 동작
+    4. 최소 쿨다운: 15분 (기존 10분 → 강화)
     """
     last_time = get_last_alert_time(ticker)
     hours_since = 999
@@ -140,12 +143,14 @@ def should_send_alert(
         except:
             pass
 
-    # ── 정규장 외 시간: 가격 기반 알림 무조건 차단 ──
+    # ── 정규장 외 시간: 가격 기반 알림 차단 ──
     if not _is_market_hours():
-        print(f"  🌙 장외 시간 — 가격 기반 알림 차단 ({ticker})")
-        return False
+        # 장 밖에서는 PSI 8+ Critical만 허용 (가격 변동 무시)
+        if abs(change_pct) < 5 and abs(intraday_reversal) < 5:
+            print(f"  🌙 장외 시간 — 가격 기반 알림 차단")
+            return False
 
-    # 6시간 이상 경과면 리셋 (장중에만 도달하는 분기)
+    # 6시간 이상 경과면 리셋
     if hours_since >= 6:
         print(f"  ✅ 6시간+ 경과, 리셋")
         return True
@@ -186,9 +191,9 @@ def should_send_alert(
         print(f"  📊 레벨 상승: {prev_level}→{current_level} ({threshold}%+ 돌파)")
         return True
 
-    # 8%+ (레벨3) 이면 장중에 한해 30분 간격으로 허용
-    if current_level >= 3 and hours_since >= 0.5 and _is_market_hours():
-        print(f"  🚨 고변동 구간 ({effective_move:.1f}%), 30분 경과 (장중)")
+    # 8%+ (레벨3) 이면 30분 간격으로 허용 (기존 15분 → 강화)
+    if current_level >= 3 and hours_since >= 0.5:
+        print(f"  🚨 고변동 구간 ({effective_move:.1f}%), 30분 경과")
         return True
 
     # Noise 일일 한도
