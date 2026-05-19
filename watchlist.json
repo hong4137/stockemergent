@@ -19,7 +19,7 @@
       "notes": ""
     },
     {
-      "active": true,
+      "active": false,
       "ticker": "AMAT",
       "name": "Applied Materials",
       "sector": "Semiconductor Equipment",
@@ -155,7 +155,7 @@
       "notes": "NVDA Ã«ÂÂÃ¬ÂÂ. AI ÃªÂ°ÂÃ¬ÂÂÃªÂ¸Â° Ã¬ÂÂÃ¬ÂÂ¥ Ã¬Â§ÂÃ¬ÂÂ."
     },
     {
-      "active": false,
+      "active": true,
       "ticker": "AVGO",
       "name": "Broadcom",
       "sector": "Semiconductor",
@@ -214,6 +214,93 @@
       ],
       "china_exposure": "low",
       "notes": ""
+    },
+    {
+      "active": true,
+      "ticker": "NET",
+      "name": "Cloudflare",
+      "sector": "Cybersecurity / Edge Network",
+      "related": [
+        "FSLY",
+        "AKAM",
+        "NET",
+        "DDOG",
+        "ZS",
+        "PANW"
+      ],
+      "keywords": [
+        "Cloudflare",
+        "NET",
+        "edge",
+        "CDN",
+        "Workers",
+        "R2",
+        "Zero Trust",
+        "DDoS",
+        "Matthew Prince",
+        "AI inference edge",
+        "Cloudflare One"
+      ],
+      "china_exposure": "low",
+      "notes": "Edge network + Zero Trust. AI inference at the edge"
+    },
+    {
+      "active": true,
+      "ticker": "AMZN",
+      "name": "Amazon",
+      "sector": "E-commerce / Cloud (AWS)",
+      "related": [
+        "MSFT",
+        "GOOGL",
+        "AAPL",
+        "META",
+        "NVDA"
+      ],
+      "keywords": [
+        "Amazon",
+        "AMZN",
+        "AWS",
+        "Bedrock",
+        "Trainium",
+        "Inferentia",
+        "Anthropic",
+        "Andy Jassy",
+        "Prime",
+        "advertising",
+        "logistics",
+        "Project Kuiper"
+      ],
+      "china_exposure": "medium",
+      "notes": "AWS capex + Anthropic stake + advertising"
+    },
+    {
+      "active": true,
+      "ticker": "QCOM",
+      "name": "Qualcomm",
+      "sector": "Semiconductor / Mobile SoC",
+      "related": [
+        "AAPL",
+        "MTK",
+        "AVGO",
+        "ARM",
+        "NVDA"
+      ],
+      "keywords": [
+        "Qualcomm",
+        "QCOM",
+        "Snapdragon",
+        "5G",
+        "modem",
+        "automotive",
+        "Apple modem",
+        "Cristiano Amon",
+        "Snapdragon X",
+        "PC",
+        "on-device AI",
+        "ARM royalty"
+      ],
+      "china_exposure": "high",
+      "notes": "Mobile SoC dominance. Apple modem transition risk. Auto/PC expansion"
     }
   ]
 }
