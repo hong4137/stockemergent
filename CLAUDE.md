@@ -42,6 +42,8 @@ GitHub Actions cron (15분 간격, 평일 장중)
 - `reasoning_effort`를 명시하지 않으면 기본값 medium으로 **추론 토큰이 출력 요금으로 과금된다.**
   이 작업엔 추론이 불필요하므로 `none`으로 고정.
 - 응답은 `response_format: json_schema` (strict)로 강제한다.
+- 모델이 특정 파라미터를 거부하면(`400` + `error.param`) 그 파라미터만 빼고 자동 재시도한다
+  (`_post_with_param_recovery`). 로그에 `🔁 ... 미지원` 이 보이면 코드에 반영할 것.
 
 ### 시간대
 `zoneinfo.ZoneInfo("America/New_York")`를 쓴다. EST/EDT를 직접 계산하지 말 것.

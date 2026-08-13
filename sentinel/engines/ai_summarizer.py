@@ -91,6 +91,47 @@ def _is_valid_article_url(url):
     return url_quality(url) > 0
 
 
+def _post_with_param_recovery(httpx, model: str, prompt: str, max_retries: int = 3):
+    """요청을 보내되, 모델이 특정 파라미터를 거부하면 그 파라미터만 빼고 재시도한다.
+
+    OpenAI는 미지원 파라미터를 400과 함께 error.param 으로 알려준다.
+    모델 세대가 바뀔 때마다 파라미터 규칙이 달라지는데(GPT-5는 temperature 거부,
+    max_tokens 대신 max_completion_tokens), 이 복구가 없으면 그런 변화가
+    전 알림의 조용한 품질 저하로 나타난다.
+    """
+    url = "https://api.openai.com/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    body = _build_request_body(model, prompt)
+    dropped = []
+
+    for _ in range(max_retries):
+        response = httpx.post(url, headers=headers, json=body, timeout=30)
+        if response.status_code != 400:
+            if dropped:
+                print(f"  ⚠️ 미지원 파라미터 제외 후 성공: {dropped} "
+                      f"— 코드에 반영 필요 (모델: {model})")
+            return response
+
+        try:
+            err = response.json().get("error", {})
+            param = err.get("param")
+        except Exception:
+            return response
+
+        # messages 같은 필수 필드는 빼면 안 된다
+        if not param or param not in body or param in ("model", "messages"):
+            return response
+
+        body.pop(param)
+        dropped.append(param)
+        print(f"  🔁 '{param}' 미지원 — 제외하고 재시도")
+
+    return response
+
+
 def summarize_event(ticker, news_data, price_data=None, sector_context=""):
     if not OPENAI_API_KEY:
         print("  ❌ OPENAI_API_KEY 미설정")
@@ -175,15 +216,7 @@ def summarize_event(ticker, news_data, price_data=None, sector_context=""):
             "}"
         )
 
-        response = httpx.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {OPENAI_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json=_build_request_body(OPENAI_MODEL, prompt),
-            timeout=30,
-        )
+        response = _post_with_param_recovery(httpx, OPENAI_MODEL, prompt)
 
         if response.status_code != 200:
             # 에러 본문을 반드시 남긴다. 상태 코드만 찍고 조용히 폴백하면
