@@ -302,6 +302,36 @@
       ],
       "china_exposure": "high",
       "notes": "Mobile SoC dominance. Apple modem transition risk. Auto/PC expansion"
+    },
+    {
+      "active": true,
+      "ticker": "NFLX",
+      "name": "Netflix",
+      "sector": "Streaming / Media",
+      "related": [
+        "DIS",
+        "WBD",
+        "SPOT",
+        "ROKU",
+        "AMZN",
+        "AAPL"
+      ],
+      "keywords": [
+        "Netflix",
+        "NFLX",
+        "streaming",
+        "subscriber",
+        "ad tier",
+        "advertising tier",
+        "password sharing",
+        "content spend",
+        "Ted Sarandos",
+        "Greg Peters",
+        "live sports",
+        "engagement"
+      ],
+      "china_exposure": "low",
+      "notes": "구독자 수 대신 매출/마진 중심 공시로 전환. 광고 요금제와 라이브 스포츠가 성장축."
     }
   ]
 }

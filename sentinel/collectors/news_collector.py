@@ -239,7 +239,8 @@ def _aliases(ticker: str) -> tuple:
             if _is_ascii(k) and len(k) >= 5 and k.upper() != ticker:
                 names.append(k.lower())
 
-    return ticker, names
+    # 'Netflix'처럼 한 단어 이름은 전체명과 첫 단어가 같아 중복된다
+    return ticker, list(dict.fromkeys(names))
 
 
 def _search_terms(ticker: str) -> List[str]:
