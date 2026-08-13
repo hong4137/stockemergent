@@ -157,54 +157,117 @@ def collect_finnhub_news(ticker: str, hours: int = 72) -> List[Dict]:
     return results
 
 
-def collect_sec_edgar(ticker: str, company_name: str = None) -> List[Dict]:
-    """SEC EDGAR에서 최근 Filing 확인"""
-    watch = WATCHMAP.get(ticker)
-    if not company_name and watch:
-        company_name = watch.name
-    
-    results = []
-    
+SEC_HEADERS = {"User-Agent": "StockSentinel research@example.com"}
+
+# 주가를 움직이는 서식만. Form 4(내부자), 144(매도예정), 13G 등 상시 제출물은 제외한다.
+SEC_MATERIAL_FORMS = {"8-K", "10-K", "10-Q", "6-K", "20-F", "SC 13D", "425", "DEFA14A"}
+
+
+def _load_cik_map() -> Dict:
+    """티커 → CIK(10자리) 매핑. SEC 전체 목록을 받아 7일간 캐시한다."""
+    from storage.database import get_meta, set_meta
+
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    cached, cached_at = get_meta("cik_map"), get_meta("cik_map_date")
+    if cached and cached_at:
+        age = (datetime.utcnow() - datetime.strptime(cached_at, "%Y-%m-%d")).days
+        if age < 7:
+            try:
+                return json.loads(cached)
+            except Exception:
+                pass
+
     try:
-        # EDGAR Full-Text Search API
-        url = "https://efts.sec.gov/LATEST/search-index"
-        params = {
-            "q": f'"{ticker}"',
-            "dateRange": "custom",
-            "startdt": (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%d"),
-            "enddt": datetime.utcnow().strftime("%Y-%m-%d"),
-            "forms": "8-K,10-Q,10-K,4",
+        resp = requests.get(
+            "https://www.sec.gov/files/company_tickers.json",
+            headers=SEC_HEADERS, timeout=15,
+        )
+        resp.raise_for_status()
+        mapping = {
+            row["ticker"].upper(): str(row["cik_str"]).zfill(10)
+            for row in resp.json().values()
         }
-        
-        headers = {"User-Agent": "StockSentinel research@example.com"}
-        resp = requests.get(url, params=params, headers=headers, timeout=10)
-        
-        if resp.status_code == 200:
-            data = resp.json()
-            hits = data.get('hits', {}).get('hits', [])
-            
-            for hit in hits[:10]:
-                source = hit.get('_source', {})
-                filing = {
-                    "ticker": ticker,
-                    "timestamp": source.get('file_date', datetime.utcnow().isoformat()),
-                    "title": f"[SEC {source.get('form_type', 'Filing')}] {source.get('entity_name', '')}",
-                    "summary": source.get('display_names', [''])[0] if source.get('display_names') else '',
-                    "url": f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={ticker}&type=&dateb=&owner=include&count=10",
-                    "source": "sec_edgar",
-                    "source_type": "filing",
-                    "sentiment": "neutral",
-                    "keywords_matched": [source.get('form_type', '')],
-                }
-                results.append(filing)
-            
-            print(f"  📋 SEC EDGAR [{ticker}]: {len(results)}건 수집")
-        else:
-            print(f"  ⚠️ SEC EDGAR 응답 코드: {resp.status_code}")
-            
+        set_meta("cik_map", json.dumps(mapping))
+        set_meta("cik_map_date", today)
+        return mapping
+    except Exception as e:
+        print(f"  ⚠️ CIK 목록 조회 실패: {e}")
+        try:
+            return json.loads(cached) if cached else {}
+        except Exception:
+            return {}
+
+
+def collect_sec_edgar(ticker: str, company_name: str = None, days: int = 7) -> List[Dict]:
+    """SEC EDGAR 최근 공시.
+
+    과거에는 full-text search 엔드포인트에 `q="{ticker}"` 로 질의했는데,
+    (1) 티커 문자열이 들어간 '남의 회사 공시'까지 딸려오고
+    (2) 응답 필드명이 form_type/entity_name 이 아니라 form/display_names 라
+    제목이 전부 빈 문자열로 들어왔다. 그 결과 공시가 뉴스 건수만 부풀리고
+    fact 점수에는 전혀 기여하지 못했다.
+
+    회사 단위 공식 API(data.sec.gov/submissions)로 교체해 정확한 서식·날짜·
+    문서 URL을 얻는다.
+    """
+    results = []
+    cik = _load_cik_map().get(ticker.upper())
+    if not cik:
+        print(f"  ⚠️ SEC CIK 없음: {ticker}")
+        return results
+
+    try:
+        resp = requests.get(
+            f"https://data.sec.gov/submissions/CIK{cik}.json",
+            headers=SEC_HEADERS, timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        name = data.get("name", company_name or ticker)
+        recent = data.get("filings", {}).get("recent", {})
+
+        forms = recent.get("form", [])
+        dates = recent.get("filingDate", [])
+        accs = recent.get("accessionNumber", [])
+        docs = recent.get("primaryDocument", [])
+        descs = recent.get("primaryDocDescription", [])
+        items = recent.get("items", [])
+
+        cutoff = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+
+        for i, form in enumerate(forms):
+            if dates[i] < cutoff:
+                break  # 최신순 정렬이므로 더 볼 필요 없음
+            if form not in SEC_MATERIAL_FORMS:
+                continue
+
+            acc_nodash = accs[i].replace("-", "")
+            doc = docs[i] if i < len(docs) else ""
+            url = (f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/"
+                   f"{acc_nodash}/{doc}") if doc else \
+                  (f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{acc_nodash}")
+
+            desc = descs[i] if i < len(descs) else ""
+            item = items[i] if i < len(items) else ""
+
+            results.append({
+                "ticker": ticker,
+                "timestamp": dates[i],
+                # 관련성 필터가 회사를 식별할 수 있도록 제목에 회사명을 넣는다
+                "title": f"[SEC {form}] {name}" + (f" — {desc}" if desc else ""),
+                "summary": f"Item {item}" if item else "",
+                "url": url,
+                "source": "sec_edgar",
+                "source_type": "filing",
+                "sentiment": "neutral",
+                "keywords_matched": [form],
+            })
+
+        print(f"  📋 SEC EDGAR [{ticker}]: {len(results)}건 (최근 {days}일 주요 서식)")
+
     except Exception as e:
         print(f"  ⚠️ SEC EDGAR 수집 오류: {e}")
-    
+
     return results
 
 

@@ -31,7 +31,8 @@ SUMMARY_SCHEMA = {
             "type": "string",
             "enum": [
                 "earnings", "partnership", "regulatory", "macro", "geopolitical",
-                "analyst", "product", "sector_rotation", "insider", "other",
+                "analyst", "product", "sector_rotation", "insider",
+                "institutional", "controversy", "other",
             ],
         },
     },
@@ -191,14 +192,27 @@ def summarize_event(ticker, news_data, price_data=None, sector_context=""):
             f"You are a stock market analyst. Analyze why {ticker} stock is moving.\n\n"
             "=== ABSOLUTE RULES ===\n"
             "1. classification MUST match price direction:\n"
-            "   - Stock declining -> Fracture (NEVER Catalyst)\n"
-            "   - Stock rising -> Catalyst (NEVER Fracture)\n"
-            "   - Flat -> Noise\n"
+            "   - Down more than 1.5% -> Fracture (NEVER Catalyst)\n"
+            "   - Up more than 1.5% -> Catalyst (NEVER Fracture)\n"
+            "   - Between -1.5% and +1.5% -> Noise, UNLESS a hard event\n"
+            "     (earnings, filing, lawsuit, M&A) clearly explains the move.\n"
+            "     Do not invent a cause for a move this small.\n"
             "2. If no clear company-specific cause (earnings, lawsuit, guidance), "
             "consider macro/geopolitical factors: war, tariffs, interest rates, risk-off. "
             'Set event_type to "geopolitical" or "macro".\n'
             "3. Even if bullish news exists, if stock is DOWN, explain "
-            '"declining despite positive news" pattern.\n\n'
+            '"declining despite positive news" pattern.\n'
+            "4. event_type definitions — pick precisely:\n"
+            "   - insider: the company's OWN officers/directors buying or selling\n"
+            "     their own shares (SEC Form 4). NOT outside investors.\n"
+            "   - institutional: outside funds, activists, or large holders taking\n"
+            "     or exiting a position (e.g. Pershing Square, ARK, 13F/13D moves).\n"
+            "   - regulatory: action by a government or regulator (fines, approvals,\n"
+            "     export controls, antitrust). NOT user backlash or public criticism.\n"
+            "   - controversy: public backlash, boycott, PR problem, or ethical\n"
+            "     dispute with no regulator involved.\n"
+            "   - sector_rotation: the whole sector moved together and there is no\n"
+            "     company-specific cause.\n\n"
             "=== DATA ===\n"
             f"Price: {price_text}\n"
             f"{price_direction}\n"
@@ -212,7 +226,7 @@ def summarize_event(ticker, news_data, price_data=None, sector_context=""):
             '  "classification": "Catalyst/Fracture/Noise",\n'
             '  "confidence": 0.0~1.0,\n'
             '  "event_type": "earnings/partnership/regulatory/macro/geopolitical/'
-            'analyst/product/sector_rotation/other"\n'
+            'analyst/product/sector_rotation/insider/institutional/controversy/other"\n'
             "}"
         )
 

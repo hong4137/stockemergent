@@ -14,6 +14,19 @@ SCORE_WEIGHTS = {
 }
 CONFLUENCE_BONUS = 1.0
 
+# 옵션 데이터는 무료 소스가 없어 미연동이다. 점수가 항상 0인데도 가중치 0.35를
+# 그대로 두면 PSI 만점의 35%가 영구히 잠겨 전 종목이 normal에 눌린다.
+# 연동되면 True로 바꾸면 된다.
+OPTIONS_ENABLED = False
+
+
+def _live_weights() -> dict:
+    """실제로 값이 들어오는 요소들로 가중치를 재정규화한다."""
+    live = {k: v for k, v in SCORE_WEIGHTS.items()
+            if k != "options" or OPTIONS_ENABLED}
+    total = sum(live.values())
+    return {k: v / total for k, v in live.items()}
+
 
 class PreSignalEngine:
     def __init__(self, ticker: str):
@@ -45,22 +58,23 @@ class PreSignalEngine:
         noise = self._calc_noise_penalty(att_score, fact_score)
 
         # 4. 종합 점수 (가격 충격은 직접 가산)
+        w = _live_weights()
         psi = (
-            SCORE_WEIGHTS["options"] * opt_score
-            + SCORE_WEIGHTS["attention"] * att_score
-            + SCORE_WEIGHTS["fact"] * fact_score
+            w.get("options", 0) * opt_score
+            + w["attention"] * att_score
+            + w["fact"] * fact_score
             + confluence
             + price_boost
             - noise
         )
         psi = max(0, min(10, round(psi, 1)))
 
-        # 레벨
-        if psi >= 8:
+        # 레벨 — settings.PSI_LEVELS 및 run_scan의 임계치(5=분석, 7=발송)와 일치시킨다
+        if psi >= 7:
             level = "critical"
-        elif psi >= 6:
+        elif psi >= 5:
             level = "alert"
-        elif psi >= 4:
+        elif psi >= 3:
             level = "watch"
         else:
             level = "normal"
@@ -157,10 +171,14 @@ class PreSignalEngine:
         if not news:
             return 0, details
 
+        # 실제 시장을 움직인 헤드라인이 이 목록을 비껴가는 경우가 많아 보강했다.
+        # (예: "Bill Ackman Takes Another Swing At NFLX" — 기존 목록에 하나도 안 걸림)
         high_impact = [
             "earnings", "revenue", "guidance", "fda", "acquisition",
             "merger", "layoff", "recall", "investigation", "lawsuit",
             "bankruptcy", "downgrade", "upgrade", "halted", "subpoena",
+            "stake", "buyback", "settlement", "probe", "tariff", "ban",
+            "beats", "misses", "acquires", "activist", "sues",
         ]
         medium_impact = [
             "analyst", "price target", "rating", "estimate",
