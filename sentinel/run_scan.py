@@ -8,14 +8,18 @@ from datetime import datetime, timezone, timedelta
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config.settings import WATCHLIST, WATCHMAP
-from storage.database import init_db
+from storage.database import (
+    init_db, save_scan, prune_scan_log, get_news_baseline, claim_once_per_day,
+)
 from collectors.news_collector import collect_all_news
 from collectors.price_collector import collect_price_yfinance, check_price_trigger
 from engines.psi_engine import PreSignalEngine, FlashReasonEngine
 from alerts.alert_system import send_alert
 from alerts.telegram import send_telegram
 
-SCAN_TICKER = os.environ.get("SCAN_TICKER", "").strip()
+# WATCHMAP 키는 대문자다. workflow_dispatch로 'mu' 처럼 들어오면 조용히 아무것도
+# 스캔하지 않으므로 반드시 대문자로 맞춘다.
+SCAN_TICKER = os.environ.get("SCAN_TICKER", "").strip().upper()
 FORCE_ALERT = os.environ.get("FORCE_ALERT", "false").lower() == "true"
 try:
     from zoneinfo import ZoneInfo
@@ -50,14 +54,19 @@ def scan_single(ticker):
     except Exception as e:
         log(f"  ⚠️ 뉴스: {e}")
 
-    # PSI
+    # PSI — 뉴스는 '평소 대비' 로 평가하므로 기준선을 넘긴다
+    baseline = get_news_baseline(ticker)
     psi_result = PreSignalEngine(ticker).calculate(
-        options_data={}, social_data={}, news_data=all_news, price_data=price_data
+        options_data={}, social_data={}, news_data=all_news, price_data=price_data,
+        news_baseline=baseline,
     )
 
     emoji = {"normal": "🟢", "watch": "🟡", "alert": "🟠", "critical": "🔴"}
     log(f"  {emoji.get(psi_result['level'], '❓')} PSI {psi_result['psi_total']:.1f} "
         f"[O:{psi_result['options_score']:.0f} A:{psi_result['attention_score']:.0f} F:{psi_result['fact_score']:.0f}]")
+
+    # 스캔 이력 기록 — 다음 스캔의 뉴스 기준선이 된다
+    save_scan(ticker, psi_result['psi_total'], psi_result['level'], len(all_news))
 
     # Flash Reason + 알림
     flash_result = None
@@ -76,7 +85,7 @@ def scan_single(ticker):
         reversal_triggered = True
         log(f"  🔄 장중 반전 감지: {price_data['intraday_reversal']:+.1f}%")
 
-    pt = check_price_trigger(ticker)
+    pt = check_price_trigger(ticker, price_data)
     if (pt and pt.get('triggered') or reversal_triggered) and not flash_result:
         flash_result = FlashReasonEngine(ticker).analyze(all_news, price_data)
         trigger = "price_reversal" if reversal_triggered else "price_surge"
@@ -94,6 +103,7 @@ def scan_single(ticker):
 
 def main():
     init_db()
+    prune_scan_log()
     now = datetime.now(ET)
     log(f"{'='*40}")
     log(f"📡 SENTINEL SCAN | {now.strftime('%Y-%m-%d %H:%M ET')}")
@@ -111,13 +121,17 @@ def main():
         e = {"normal": "🟢", "watch": "🟡", "alert": "🟠", "critical": "🔴"}.get(r['level'], "❓")
         log(f"  {e} {r['ticker']:6s} PSI {r['psi']:4.1f} → {r['cls']} ({r['news']}건)")
 
-    # 장마감 일일요약
-    if now.hour == 16 and now.minute < 35:
-        msg = f"📊 *Daily Summary* {now.strftime('%m/%d')}\n━━━━━━━━━━━━━━━\n"
-        for r in results:
-            e = {"normal": "🟢", "watch": "🟡", "alert": "🟠", "critical": "🔴"}.get(r['level'], "❓")
-            msg += f"{e} *{r['ticker']}* PSI {r['psi']:.1f} → {r['cls']}\n"
-        send_telegram(msg)
+    # 장마감 일일요약 — 하루 1회.
+    # 시간 조건만 쓰면 cron 슬롯이 여러 개 걸려 하루 3번씩 나갔다.
+    if now.weekday() < 5 and now.hour == 16 and now.minute < 35:
+        if claim_once_per_day("daily_summary", now.strftime("%Y-%m-%d")):
+            msg = f"📊 *Daily Summary* {now.strftime('%m/%d')}\n━━━━━━━━━━━━━━━\n"
+            for r in results:
+                e = {"normal": "🟢", "watch": "🟡", "alert": "🟠", "critical": "🔴"}.get(r['level'], "❓")
+                msg += f"{e} *{r['ticker']}* PSI {r['psi']:.1f} → {r['cls']}\n"
+            send_telegram(msg)
+        else:
+            log("  ⏭️ 일일요약 이미 발송됨")
 
 
 if __name__ == "__main__":

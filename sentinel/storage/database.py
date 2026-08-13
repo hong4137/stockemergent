@@ -17,26 +17,34 @@ def _connect():
     return conn
 
 
+# 스키마 변경 시 여기에 (컬럼명, 타입+기본값)을 추가하면 ALTER TABLE로 자동 반영된다.
+# 절대 DROP 하지 말 것 — alerts 테이블은 쿨다운 판정과 알림 이력의 유일한 근거다.
+ALERTS_COLUMNS = [
+    ("alert_id", "TEXT PRIMARY KEY"),
+    ("ticker", "TEXT NOT NULL"),
+    ("timestamp", "TEXT NOT NULL"),
+    ("trigger_type", "TEXT"),
+    ("psi_total", "REAL"),
+    ("classification", "TEXT"),
+    ("confidence", "REAL"),
+    ("reason_candidates", "TEXT"),
+    ("playbook_id", "TEXT"),
+    ("playbook_actions", "TEXT"),
+    ("sent_via", "TEXT DEFAULT 'console'"),
+    ("change_pct", "REAL DEFAULT 0"),
+    # ── 관측성: 실제로 발송된 내용을 남긴다 ──
+    ("headline", "TEXT DEFAULT ''"),
+    ("detail", "TEXT DEFAULT ''"),
+    ("event_type", "TEXT DEFAULT ''"),
+    ("ai_generated", "INTEGER DEFAULT 0"),
+    ("key_source", "TEXT DEFAULT ''"),
+    ("model", "TEXT DEFAULT ''"),
+]
+
+
 def init_db():
     conn = _connect()
     c = conn.cursor()
-
-    # alerts 테이블 — 필요한 컬럼 체크 후 재생성
-    required_cols = {"alert_id", "ticker", "timestamp", "trigger_type", "psi_total",
-                     "classification", "confidence", "reason_candidates",
-                     "playbook_id", "playbook_actions", "sent_via", "change_pct"}
-
-    try:
-        c.execute("PRAGMA table_info(alerts)")
-        existing_cols = {row[1] for row in c.fetchall()}
-    except Exception:
-        existing_cols = set()
-
-    missing = required_cols - existing_cols
-    if missing and existing_cols:
-        # 컬럼 누락 — 테이블 DROP 후 재생성 (이력 초기화)
-        print(f"⚠️ alerts 테이블 마이그레이션: 누락 컬럼 {missing} → 재생성")
-        c.execute("DROP TABLE IF EXISTS alerts")
 
     c.execute("""
         CREATE TABLE IF NOT EXISTS alerts (
@@ -55,6 +63,18 @@ def init_db():
         )
     """)
 
+    # 누락 컬럼은 ALTER TABLE로 추가 (이력 보존)
+    c.execute("PRAGMA table_info(alerts)")
+    existing = {row[1] for row in c.fetchall()}
+    for name, decl in ALERTS_COLUMNS:
+        if name in existing:
+            continue
+        # PRIMARY KEY / NOT NULL 은 ALTER TABLE ADD COLUMN 으로 붙일 수 없다.
+        # 해당 컬럼들은 위 CREATE TABLE 에 이미 포함돼 있으므로 여기 도달하지 않는다.
+        safe_decl = decl.replace("PRIMARY KEY", "").replace("NOT NULL", "").strip()
+        c.execute(f"ALTER TABLE alerts ADD COLUMN {name} {safe_decl}")
+        print(f"  🔧 alerts.{name} 컬럼 추가")
+
     c.execute("""
         CREATE TABLE IF NOT EXISTS scan_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -64,6 +84,13 @@ def init_db():
             level TEXT,
             news_count INTEGER,
             classification TEXT
+        )
+    """)
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS meta (
+            key TEXT PRIMARY KEY,
+            value TEXT
         )
     """)
 
@@ -99,6 +126,12 @@ def save_alert(
     playbook_actions: list,
     sent_via: str = "console",
     change_pct: float = 0,
+    headline: str = "",
+    detail: str = "",
+    event_type: str = "",
+    ai_generated: bool = False,
+    key_source: str = "",
+    model: str = "",
 ):
     conn = _connect()
     c = conn.cursor()
@@ -106,12 +139,14 @@ def save_alert(
         """INSERT OR REPLACE INTO alerts
            (alert_id, ticker, timestamp, trigger_type, psi_total,
             classification, confidence, reason_candidates,
-            playbook_id, playbook_actions, sent_via, change_pct)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            playbook_id, playbook_actions, sent_via, change_pct,
+            headline, detail, event_type, ai_generated, key_source, model)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             alert_id, ticker, timestamp, trigger_type, psi_total,
             classification, confidence, json.dumps(reason_candidates),
             playbook_id, json.dumps(playbook_actions), sent_via, change_pct,
+            headline, detail, event_type, int(bool(ai_generated)), key_source, model,
         ),
     )
     conn.commit()
@@ -213,6 +248,84 @@ def count_noise_alerts_today(ticker: str) -> int:
     row = c.fetchone()
     conn.close()
     return row["cnt"] if row else 0
+
+
+def get_meta(key: str) -> Optional[str]:
+    conn = _connect()
+    c = conn.cursor()
+    c.execute("SELECT value FROM meta WHERE key = ?", (key,))
+    row = c.fetchone()
+    conn.close()
+    return row["value"] if row else None
+
+
+def set_meta(key: str, value: str):
+    conn = _connect()
+    c = conn.cursor()
+    c.execute(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value)
+    )
+    conn.commit()
+    conn.close()
+
+
+def claim_once_per_day(key: str, day: str) -> bool:
+    """오늘 아직 안 한 작업이면 True를 주고 즉시 잠근다.
+
+    cron 스케줄이 겹쳐 같은 시각에 워크플로가 두 번 돌아도
+    일일 요약이 중복 발송되지 않게 한다.
+    """
+    if get_meta(key) == day:
+        return False
+    set_meta(key, day)
+    return True
+
+
+SCAN_LOG_RETENTION_DAYS = 30
+
+
+def prune_scan_log(days: int = SCAN_LOG_RETENTION_DAYS):
+    """scan_log 보존기간 초과분 삭제.
+
+    sentinel.db는 매 스캔마다 git에 커밋되므로 무한 증가하면 레포가 부푼다.
+    PSI baseline 계산에는 최근 30일이면 충분하다.
+    """
+    cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    conn = _connect()
+    c = conn.cursor()
+    c.execute("DELETE FROM scan_log WHERE timestamp < ?", (cutoff,))
+    removed = c.rowcount
+    conn.commit()
+    conn.close()
+    if removed > 0:
+        print(f"  🧹 scan_log {removed}행 정리 ({days}일 초과)")
+    return removed
+
+
+def get_news_baseline(ticker: str, days: int = 14) -> Optional[float]:
+    """평소 뉴스 건수(중앙값). PSI의 '평소 대비' 판정에 쓴다.
+
+    이력이 부족하면 None을 반환하고, 호출측이 절대 건수 방식으로 폴백한다.
+    """
+    cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    conn = _connect()
+    c = conn.cursor()
+    c.execute(
+        """SELECT news_count FROM scan_log
+           WHERE ticker = ? AND timestamp >= ? AND news_count IS NOT NULL
+           ORDER BY news_count""",
+        (ticker, cutoff),
+    )
+    counts = [r[0] for r in c.fetchall()]
+    conn.close()
+
+    if len(counts) < 20:  # 표본 부족 — 신뢰할 수 없음
+        return None
+
+    mid = len(counts) // 2
+    if len(counts) % 2:
+        return float(counts[mid])
+    return (counts[mid - 1] + counts[mid]) / 2
 
 
 def get_recent_alerts(ticker: str = None, limit: int = 20) -> list:

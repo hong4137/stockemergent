@@ -48,7 +48,7 @@
         "CHIPS Act"
       ],
       "china_exposure": "high",
-      "notes": "WFE 1Ã¬ÂÂ. AI/HBM Ã¬ÂÂÃ­ÂÂ. BIS Ã¬ÂÂÃ¬Â¶ÂÃªÂ·ÂÃ¬Â Â Ã«Â¦Â¬Ã¬ÂÂ¤Ã­ÂÂ¬."
+      "notes": "WFE 1위. AI/HBM 수혜. BIS 수출규제 리스크."
     },
     {
       "active": false,
@@ -77,7 +77,7 @@
         "inference"
       ],
       "china_exposure": "high",
-      "notes": "AI GPU Ã¬Â§ÂÃ«Â°Â°Ã¬Â Â. Ã«ÂÂ°Ã¬ÂÂ´Ã­ÂÂ°Ã¬ÂÂ¼Ã­ÂÂ° Ã«Â§Â¤Ã¬Â¶Â Ã­ÂÂµÃ¬ÂÂ¬."
+      "notes": "AI GPU 지배적. 데이터센터 매출 핵심."
     },
     {
       "active": false,
@@ -101,7 +101,7 @@
         "Intel foundry"
       ],
       "china_exposure": "high",
-      "notes": "EUV Ã«ÂÂÃ¬Â Â. Ã¬ÂÂÃ¬Â¶ÂÃªÂ·ÂÃ¬Â Â Ã¬Â§ÂÃ¬Â Â Ã¬ÂÂÃ­ÂÂ¥."
+      "notes": "EUV 독점. 수출규제 직접 영향."
     },
     {
       "active": false,
@@ -128,7 +128,7 @@
         "Japan fab"
       ],
       "china_exposure": "medium",
-      "notes": "Ã­ÂÂÃ¬ÂÂ´Ã«ÂÂÃ«Â¦Â¬ 1Ã¬ÂÂ. CapExÃªÂ°Â Ã¬ÂÂ¥Ã«Â¹ÂÃ¬Â£Â¼ Ã¬ÂÂ Ã­ÂÂÃ¬Â§ÂÃ­ÂÂ."
+      "notes": "파운드리 1위. CapEx가 장비주 선행지표."
     },
     {
       "active": false,
@@ -152,7 +152,7 @@
         "Lisa Su"
       ],
       "china_exposure": "medium",
-      "notes": "NVDA Ã«ÂÂÃ¬ÂÂ. AI ÃªÂ°ÂÃ¬ÂÂÃªÂ¸Â° Ã¬ÂÂÃ¬ÂÂ¥ Ã¬Â§ÂÃ¬ÂÂ."
+      "notes": "NVDA 대안. AI 가속기 시장 진입."
     },
     {
       "active": true,
@@ -175,7 +175,7 @@
         "Hock Tan"
       ],
       "china_exposure": "low",
-      "notes": "Ã¬Â»Â¤Ã¬ÂÂ¤Ã­ÂÂ AIÃ¬Â¹Â© + VMware. Ã«ÂÂ¤Ã­ÂÂ¸Ã¬ÂÂÃ­ÂÂ¹ ÃªÂ°ÂÃ¬ÂÂ."
+      "notes": "커스텀 AI칩 + VMware. 네트워킹 강자."
     },
     {
       "active": false,
@@ -196,21 +196,22 @@
         "rack scale"
       ],
       "china_exposure": "low",
-      "notes": "AI Ã¬ÂÂÃ«Â²Â Ã¬Â¡Â°Ã«Â¦Â½. NVDA GPU Ã­ÂÂÃ¬ÂÂ¬ Ã¬ÂÂÃ«Â²Â Ã«ÂÂÃ­ÂÂÃ¬Â£Â¼."
+      "notes": "AI 서버 조립. NVDA GPU 탑재 서버 대표주."
     },
     {
       "active": true,
       "ticker": "PANW",
-      "name": "íë¡ìí  ë¤í¸ìì¤",
-      "sector": "ë³´ì",
+      "name": "팔로알토 네트웍스",
+      "sector": "보안",
       "related": [],
       "keywords": [
         "PANW",
-        "íë¡ìí  ë¤í¸ìì¤",
+        "Palo Alto Networks",
+        "팔로알토 네트웍스",
         "paloalto",
         "panw",
-        "íë¡ìí ",
-        "ë³´ì"
+        "팔로알토",
+        "보안"
       ],
       "china_exposure": "low",
       "notes": ""

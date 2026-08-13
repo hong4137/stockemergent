@@ -25,10 +25,13 @@ class PreSignalEngine:
         social_data: Dict = None,
         news_data: List = None,
         price_data: Dict = None,
+        news_baseline: float = None,
     ) -> Dict:
         # 1. 각 요소 점수 계산
         opt_score, opt_details = self._calc_options_score(options_data or {})
-        att_score, att_details = self._calc_attention_score(social_data or {}, news_data or [])
+        att_score, att_details = self._calc_attention_score(
+            social_data or {}, news_data or [], news_baseline
+        )
         fact_score, fact_details = self._calc_fact_score(news_data or [])
 
         # 1b. 가격 충격 보너스 (급등/급락 시 PSI 직접 부스트)
@@ -91,63 +94,113 @@ class PreSignalEngine:
         # TODO: 옵션 데이터 API 연동
         return score, details
 
-    def _calc_attention_score(self, social: Dict, news: List) -> Tuple[float, Dict]:
-        """미디어 관심도"""
+    def _calc_attention_score(
+        self, social: Dict, news: List, baseline: float = None
+    ) -> Tuple[float, Dict]:
+        """미디어 관심도 — '평소 대비' 로 측정한다.
+
+        절대 건수로 재면 대형주는 평상시에도 20건을 넘겨 상시 만점이 됐다.
+        그 결과 PSI가 5.5점 언저리에 고정돼 변별력이 사라졌고, 실제로 알림
+        827건 중 19%가 주가 2% 미만에서 발송됐다. 이상 징후는 절대량이 아니라
+        평소 대비 증가폭이다.
+        """
         score = 0.0
         details = {"factors": []}
-
         news_count = len(news) if news else 0
-        if news_count >= 20:
-            score += 7
-            details["factors"].append(f"뉴스 {news_count}건 (폭발)")
-        elif news_count >= 10:
-            score += 5
-            details["factors"].append(f"뉴스 {news_count}건 (급증)")
-        elif news_count >= 5:
-            score += 3
-            details["factors"].append(f"뉴스 {news_count}건")
-        elif news_count >= 1:
-            score += 1
-            details["factors"].append(f"뉴스 {news_count}건")
+
+        if not news_count:
+            return 0.0, details
+
+        if baseline and baseline >= 1:
+            ratio = news_count / baseline
+            if ratio >= 3:
+                score = 8
+                label = "폭증"
+            elif ratio >= 2:
+                score = 6
+                label = "급증"
+            elif ratio >= 1.5:
+                score = 4
+                label = "증가"
+            elif ratio >= 1.2:
+                score = 2
+                label = "소폭 증가"
+            else:
+                score = 0
+                label = "평시 수준"
+            details["factors"].append(
+                f"뉴스 {news_count}건 / 평소 {baseline:.0f}건 = {ratio:.1f}x ({label})"
+            )
+        else:
+            # 이력 부족 — 절대 건수 폴백. 기존보다 보수적으로 잡는다.
+            if news_count >= 25:
+                score = 5
+            elif news_count >= 15:
+                score = 3
+            elif news_count >= 8:
+                score = 2
+            elif news_count >= 3:
+                score = 1
+            details["factors"].append(f"뉴스 {news_count}건 (기준선 미확보)")
 
         return min(10, score), details
 
     def _calc_fact_score(self, news: List) -> Tuple[float, Dict]:
-        """팩트 심각도"""
+        """팩트 심각도 — 키워드 종류가 아니라 '몇 건의 기사가' 사건을 다루는지로 잰다.
+
+        기존에는 전체 제목을 이어붙여 키워드 '종류'를 셌기 때문에, 무관한 기사가
+        섞이기만 해도 점수가 올랐고 대부분의 스캔에서 4~7점이 나왔다.
+        """
         score = 0.0
         details = {"factors": []}
 
         if not news:
             return 0, details
 
-        # 키워드 기반 점수
         high_impact = [
-            "earnings", "revenue", "guidance", "FDA", "acquisition",
+            "earnings", "revenue", "guidance", "fda", "acquisition",
             "merger", "layoff", "recall", "investigation", "lawsuit",
-            "bankruptcy", "contract", "partnership", "AI", "chip",
+            "bankruptcy", "downgrade", "upgrade", "halted", "subpoena",
         ]
         medium_impact = [
-            "analyst", "upgrade", "downgrade", "price target",
-            "rating", "estimate", "forecast", "outlook",
+            "analyst", "price target", "rating", "estimate",
+            "forecast", "outlook", "contract", "partnership",
         ]
 
-        titles = " ".join(
-            n.get("title", n.get("headline", "")).lower() for n in news
-        )
+        high_articles = 0
+        med_articles = 0
+        filings = 0
 
-        high_hits = sum(1 for k in high_impact if k in titles)
-        med_hits = sum(1 for k in medium_impact if k in titles)
+        for n in news:
+            title = (n.get("title") or n.get("headline") or "").lower()
+            if not title:
+                continue
+            if n.get("source_type") == "filing":
+                filings += 1
+                continue
+            if any(k in title for k in high_impact):
+                high_articles += 1
+            elif any(k in title for k in medium_impact):
+                med_articles += 1
 
-        if high_hits >= 3:
-            score += 7
-            details["factors"].append(f"고영향 키워드 {high_hits}개")
-        elif high_hits >= 1:
+        if high_articles >= 4:
+            score += 6
+            details["factors"].append(f"고영향 기사 {high_articles}건")
+        elif high_articles >= 2:
             score += 4
-            details["factors"].append(f"고영향 키워드 {high_hits}개")
-
-        if med_hits >= 2:
+            details["factors"].append(f"고영향 기사 {high_articles}건")
+        elif high_articles >= 1:
             score += 2
-            details["factors"].append(f"중영향 키워드 {med_hits}개")
+            details["factors"].append(f"고영향 기사 {high_articles}건")
+
+        if med_articles >= 3:
+            score += 1
+            details["factors"].append(f"중영향 기사 {med_articles}건")
+
+        # 공시는 추측이 아니라 확정 사실이므로 가중치를 높게 준다
+        if filings:
+            score += 3
+            details["factors"].append(f"SEC 공시 {filings}건")
 
         return min(10, score), details
 

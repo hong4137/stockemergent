@@ -1,6 +1,10 @@
 """
-Stock Sentinel -- AI Summarizer v3.1
+Stock Sentinel -- AI Summarizer v4.0
 v3.1: price direction priority + macro/sector event detection
+v4.0: gpt-5.6-luna 전환 + 구조화 출력 + 실패 가시화
+
+모델 롤백은 OPENAI_MODEL 환경변수로 한다 (코드 수정 불필요).
+  예) OPENAI_MODEL=gpt-4.1-mini
 """
 import os
 import json
@@ -8,24 +12,91 @@ from typing import Dict, List, Optional
 from urllib.parse import urlparse
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.6-luna")
+
+# GPT-5 계열은 temperature/max_tokens를 받지 않고, reasoning_effort를 명시하지 않으면
+# 기본값 medium으로 추론 토큰이 생성돼 출력 요금이 몇 배로 뛴다. 이 작업은 추론이 필요 없다.
+REASONING_EFFORT = os.environ.get("OPENAI_REASONING_EFFORT", "none")
+
+# 구조화 출력 스키마 — 모델이 이 형태를 벗어난 응답을 낼 수 없게 강제한다.
+# 이게 있으면 응답에서 ```json 을 문자열로 벗겨내던 취약한 파싱이 필요 없다.
+SUMMARY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "headline": {"type": "string", "description": "핵심 원인 한 줄 (한국어, 20자 이내)"},
+        "detail": {"type": "string", "description": "1-2문장 설명 (한국어, 주가 방향과 일치해야 함)"},
+        "classification": {"type": "string", "enum": ["Catalyst", "Fracture", "Noise"]},
+        "confidence": {"type": "number"},
+        "event_type": {
+            "type": "string",
+            "enum": [
+                "earnings", "partnership", "regulatory", "macro", "geopolitical",
+                "analyst", "product", "sector_rotation", "insider", "other",
+            ],
+        },
+    },
+    "required": ["headline", "detail", "classification", "confidence", "event_type"],
+    "additionalProperties": False,
+}
+
+
+def _build_request_body(model: str, prompt: str) -> dict:
+    """모델 계열에 맞는 요청 본문. GPT-5 계열과 구형 모델의 파라미터가 다르다."""
+    body = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "stock_event_summary",
+                "schema": SUMMARY_SCHEMA,
+                "strict": True,
+            },
+        },
+    }
+
+    if model.startswith("gpt-5"):
+        body["max_completion_tokens"] = 400
+        body["reasoning_effort"] = REASONING_EFFORT
+    else:
+        # gpt-4.x 계열 (롤백 경로)
+        body["max_tokens"] = 400
+        body["temperature"] = 0.2
+
+    return body
+
+
+def url_quality(url: str) -> int:
+    """링크 품질 순위. 높을수록 좋다. 0이면 쓸 수 없다.
+
+    2 = 언론사 기사 주소 (가장 좋음)
+    1 = 리다이렉터 주소. 보기엔 지저분해도 클릭하면 기사로 연결된다.
+        Google News RSS는 2024년 이후 실제 URL을 노출하지 않으므로
+        (link/summary 어디에도 없고 ID도 불투명) 이걸 막으면 링크가 아예 없어진다.
+    0 = 언론사 대문 등 기사로 연결되지 않는 주소
+    """
+    if not url:
+        return 0
+    if "googleapis.com" in url:
+        return 0
+    if "news.google.com/rss" in url or "finnhub.io/api" in url:
+        return 1
+    path = urlparse(url).path.strip("/")
+    if not path or len(path) < 3:
+        return 0
+    return 2
 
 
 def _is_valid_article_url(url):
-    if not url:
-        return False
-    bad = ["news.google.com/rss", "finnhub.io/api", "googleapis.com"]
-    if any(p in url for p in bad):
-        return False
-    path = urlparse(url).path.strip("/")
-    if not path or len(path) < 3:
-        return False
-    return True
+    return url_quality(url) > 0
 
 
 def summarize_event(ticker, news_data, price_data=None, sector_context=""):
     if not OPENAI_API_KEY:
-        print("  OPENAI_API_KEY missing")
-        return _fallback_summary(ticker, news_data, price_data)
+        print("  ❌ OPENAI_API_KEY 미설정")
+        return _fallback_summary(
+            ticker, news_data, price_data, fallback_reason="API 키 없음"
+        )
 
     try:
         import httpx
@@ -43,6 +114,9 @@ def summarize_event(ticker, news_data, price_data=None, sector_context=""):
             news_text += "\n"
             if _is_valid_article_url(url):
                 valid_urls.append(url)
+
+        # 언론사 직링크를 리다이렉터보다 우선 (정렬 안정성 유지)
+        valid_urls.sort(key=url_quality, reverse=True)
 
         price_text = "no data"
         price_direction = ""
@@ -107,20 +181,24 @@ def summarize_event(ticker, news_data, price_data=None, sector_context=""):
                 "Authorization": f"Bearer {OPENAI_API_KEY}",
                 "Content-Type": "application/json",
             },
-            json={
-                "model": "gpt-4.1-mini",
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 300,
-                "temperature": 0.2,
-            },
-            timeout=15,
+            json=_build_request_body(OPENAI_MODEL, prompt),
+            timeout=30,
         )
 
         if response.status_code != 200:
-            print(f"  OpenAI API error {response.status_code}")
-            return _fallback_summary(ticker, news_data, price_data)
+            # 에러 본문을 반드시 남긴다. 상태 코드만 찍고 조용히 폴백하면
+            # 파라미터 비호환 같은 문제가 몇 주씩 묻힌다.
+            print(f"  ❌ OpenAI {OPENAI_MODEL} API error {response.status_code}: "
+                  f"{response.text[:400]}")
+            return _fallback_summary(
+                ticker, news_data, price_data,
+                fallback_reason=f"API {response.status_code}",
+            )
 
-        content = response.json()["choices"][0]["message"]["content"].strip()
+        payload = response.json()
+        content = payload["choices"][0]["message"]["content"].strip()
+
+        # strict json_schema 사용 시 코드펜스가 붙지 않지만, 롤백 모델 대비 방어적으로 유지
         if content.startswith("```"):
             content = content.split("\n", 1)[-1]
         if content.endswith("```"):
@@ -128,6 +206,16 @@ def summarize_event(ticker, news_data, price_data=None, sector_context=""):
         content = content.strip()
 
         result = json.loads(content)
+
+        # 토큰 사용량 로깅 — 추론 토큰이 새는지 Actions 로그에서 바로 보이게
+        usage = payload.get("usage", {})
+        if usage:
+            reasoning = (usage.get("completion_tokens_details") or {}).get(
+                "reasoning_tokens", 0
+            )
+            print(f"  🧮 tokens in:{usage.get('prompt_tokens', 0)} "
+                  f"out:{usage.get('completion_tokens', 0)}"
+                  + (f" (reasoning:{reasoning})" if reasoning else ""))
 
         # Price direction override (safety net)
         if price_data:
@@ -141,6 +229,7 @@ def summarize_event(ticker, news_data, price_data=None, sector_context=""):
                 print(f"  Override: Fracture->Catalyst (price {pct:+.1f}%)")
 
         result["ai_generated"] = True
+        result["model"] = OPENAI_MODEL
         result["source_count"] = len(news_data)
         result["key_source"] = valid_urls[0] if valid_urls else ""
 
@@ -152,11 +241,13 @@ def summarize_event(ticker, news_data, price_data=None, sector_context=""):
         return result
 
     except Exception as e:
-        print(f"  AI error: {e}")
-        return _fallback_summary(ticker, news_data, price_data)
+        print(f"  ❌ AI error ({OPENAI_MODEL}): {type(e).__name__}: {e}")
+        return _fallback_summary(
+            ticker, news_data, price_data, fallback_reason=type(e).__name__
+        )
 
 
-def _fallback_summary(ticker, news_data, price_data=None):
+def _fallback_summary(ticker, news_data, price_data=None, fallback_reason=""):
     headline = "주요 신호 발생"
     detail = ""
     classification = "Noise"
@@ -193,6 +284,9 @@ def _fallback_summary(ticker, news_data, price_data=None):
             key_source = url
             break
 
+    if fallback_reason:
+        print(f"  ⚠️ 규칙 기반 폴백 사용 (사유: {fallback_reason})")
+
     return {
         "headline": headline,
         "detail": detail,
@@ -200,6 +294,8 @@ def _fallback_summary(ticker, news_data, price_data=None):
         "confidence": confidence,
         "event_type": event_type,
         "ai_generated": False,
+        "fallback_reason": fallback_reason,
+        "model": "",
         "source_count": len(news_data),
         "key_source": key_source,
     }

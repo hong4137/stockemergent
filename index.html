@@ -143,11 +143,20 @@ function saveSetup(){
 }
 function skipSetup(){document.getElementById("setupOverlay").style.display="none";watchlist=structuredClone(DW);originalJson=JSON.stringify(watchlist);render()}
 
+// base64 → UTF-8 문자열.
+// atob()만 쓰면 바이트를 latin-1로 읽어 한글이 깨진다. 저장은 UTF-8로 나가므로
+// 로드→저장을 반복할 때마다 손상이 누적된다(실측: watchlist.json 12개 필드 손상).
+function b64utf8(b64){
+  const bin=atob((b64||"").replace(/\s/g,""));
+  const bytes=Uint8Array.from(bin,c=>c.charCodeAt(0));
+  return new TextDecoder("utf-8").decode(bytes);
+}
+
 async function loadGH(){
   const{token,repo}=getGH();if(!token||!repo)return;
   try{
     const r=await fetch(`https://api.github.com/repos/${repo}/contents/watchlist.json`,{headers:{Authorization:`Bearer ${token}`,Accept:"application/vnd.github.v3+json"}});
-    if(r.ok){const d=await r.json();watchlist=(JSON.parse(atob(d.content))).watchlist||[];originalJson=JSON.stringify(watchlist);render();toast("✅ 로드 완료","success")}
+    if(r.ok){const d=await r.json();watchlist=(JSON.parse(b64utf8(d.content))).watchlist||[];originalJson=JSON.stringify(watchlist);render();toast("✅ 로드 완료","success")}
     else if(r.status===404){watchlist=structuredClone(DW);originalJson="[]";hasChanges=true;render();updateSaveBar();toast("📋 기본 목록 로드. 저장해주세요.","success")}
     else throw new Error(`HTTP ${r.status}`)
   }catch(e){toast("⚠️ "+e.message,"error");watchlist=structuredClone(DW);originalJson=JSON.stringify(watchlist);render()}

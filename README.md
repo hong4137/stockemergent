@@ -27,8 +27,8 @@ GitHub Actions (자동 스케줄)
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | @BotFather에서 발급 | ✅ |
 | `TELEGRAM_CHAT_ID` | 봇 대화 Chat ID | ✅ |
+| `OPENAI_API_KEY` | AI 한국어 요약 (gpt-5.6-luna) | ✅ |
 | `FINNHUB_API_KEY` | finnhub.io 무료 키 | 권장 |
-| `GEMINI_API_KEY` | Google AI Studio 키 | 선택 |
 
 ### 3. Telegram 봇 만들기
 1. 텔레그램에서 `@BotFather` 검색 → `/newbot`
@@ -71,20 +71,16 @@ sentinel/
 - 🔴 **Critical** (7~10): 즉시 알림 + 원인 규명
 
 ## 워치리스트 추가
-`sentinel/config/settings.py`에서 `WATCHLIST`에 추가:
-```python
-WatchItem(
-    ticker="NVDA",
-    name="NVIDIA",
-    sector="Semiconductor",
-    related=["AMD", "AVGO", "TSM"],
-    keywords=["GPU", "AI", "Blackwell", "data center"],
-)
-```
+레포 루트의 `watchlist.json`을 편집하거나, `index.html`을 열어 웹 UI로 관리한다
+(GitHub Fine-grained token의 Contents Read/Write 권한 필요).
+
+`active: true`인 종목만 스캔한다. 표시명을 한글로 넣는 경우 `keywords`에 **영문 명칭을
+반드시 포함**해야 영문 기사와 매칭된다.
 
 ## 비용
-**$0/월** — 모든 구성요소 무료
-- GitHub Actions (public 레포): 무제한
-- yfinance / Google News RSS / SEC EDGAR: 무료
-- Telegram Bot API: 무료
-- Gemini Flash (선택): 무료 티어
+**월 $0.3 내외** — OpenAI API 외에는 전부 무료
+- OpenAI gpt-5.6-luna: 알림 발송 건에 대해서만 호출 (~$0.3/월)
+- GitHub Actions / yfinance / Google News RSS / SEC EDGAR / Telegram: 무료
+
+## 개발자 문서
+아키텍처, 함정, 점검 쿼리는 [CLAUDE.md](CLAUDE.md) 참고.

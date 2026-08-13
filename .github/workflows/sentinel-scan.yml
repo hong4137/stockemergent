@@ -4,8 +4,9 @@ on:
   schedule:
     # 장중 (ET 09:00-16:00 = UTC 14:00-21:00): 15분 간격, 평일
     - cron: '*/15 13-20 * * 1-5'
-    # 장후: 30분 간격 (UTC 20-23 covers both EST/EDT)
-    - cron: '0,30 20-23 * * 1-5'
+    # 장후: 30분 간격. 위 스케줄과 UTC 20시가 겹치면 같은 시각에 두 번 돌아
+    # 일일요약이 중복 발송되므로 21시부터 시작한다.
+    - cron: '0,30 21-23 * * 1-5'
     # 장외 야간: 1시간 간격
     - cron: '0 0-12 * * 1-5'
     # 주말: 4시간
@@ -45,8 +46,9 @@ jobs:
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # 모델 롤백은 이 값만 바꾸면 된다 (예: gpt-4.1-mini)
+          OPENAI_MODEL: gpt-5.6-luna
           SCAN_MODE: market_open
           SCAN_TICKER: ${{ github.event.inputs.ticker || '' }}
           FORCE_ALERT: ${{ github.event.inputs.force_alert || 'false' }}

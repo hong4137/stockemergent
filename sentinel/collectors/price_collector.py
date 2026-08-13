@@ -79,9 +79,14 @@ def collect_price_yfinance(ticker: str) -> dict:
         return None
 
 
-def check_price_trigger(ticker: str) -> dict:
-    """가격 급변 트리거 (±3% 이상)"""
-    price_data = collect_price_yfinance(ticker)
+def check_price_trigger(ticker: str, price_data: dict = None) -> dict:
+    """가격 급변 트리거 (±3% 이상)
+
+    price_data를 넘기면 재조회하지 않는다. 스캔 한 번에 yfinance를 두 번 때리면
+    종목 수만큼 불필요한 요청이 나가고 레이트리밋 위험만 커진다.
+    """
+    if price_data is None:
+        price_data = collect_price_yfinance(ticker)
     if not price_data:
         return {"triggered": False}
 
