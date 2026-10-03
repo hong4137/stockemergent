@@ -5,6 +5,7 @@
       "ticker": "MU",
       "name": "Micron Technology",
       "sector": "semiconductor",
+      "sector_etf": "SOXX",
       "related": [
         "SAMSUNG",
         "SK HYNIX"
@@ -23,6 +24,7 @@
       "ticker": "AMAT",
       "name": "Applied Materials",
       "sector": "Semiconductor Equipment",
+      "sector_etf": "SOXX",
       "related": [
         "ASML",
         "LRCX",
@@ -55,6 +57,7 @@
       "ticker": "NVDA",
       "name": "NVIDIA",
       "sector": "Semiconductor",
+      "sector_etf": "SOXX",
       "related": [
         "AMD",
         "AVGO",
@@ -84,6 +87,7 @@
       "ticker": "ASML",
       "name": "ASML Holding",
       "sector": "Semiconductor Equipment",
+      "sector_etf": "SOXX",
       "related": [
         "AMAT",
         "LRCX",
@@ -108,6 +112,7 @@
       "ticker": "TSM",
       "name": "TSMC",
       "sector": "Semiconductor Foundry",
+      "sector_etf": "SOXX",
       "related": [
         "AMAT",
         "ASML",
@@ -135,11 +140,11 @@
       "ticker": "AMD",
       "name": "Advanced Micro Devices",
       "sector": "Semiconductor",
+      "sector_etf": "SOXX",
       "related": [
         "NVDA",
         "INTC",
-        "TSM",
-        "XLNX"
+        "TSM"
       ],
       "keywords": [
         "AMD",
@@ -159,6 +164,7 @@
       "ticker": "AVGO",
       "name": "Broadcom",
       "sector": "Semiconductor",
+      "sector_etf": "SOXX",
       "related": [
         "NVDA",
         "MRVL",
@@ -182,6 +188,7 @@
       "ticker": "SMCI",
       "name": "Super Micro Computer",
       "sector": "IT Infrastructure",
+      "sector_etf": "XLK",
       "related": [
         "NVDA",
         "DELL",
@@ -203,6 +210,7 @@
       "ticker": "PANW",
       "name": "팔로알토 네트웍스",
       "sector": "보안",
+      "sector_etf": "CIBR",
       "related": [],
       "keywords": [
         "PANW",
@@ -221,6 +229,7 @@
       "ticker": "NET",
       "name": "Cloudflare",
       "sector": "Cybersecurity / Edge Network",
+      "sector_etf": "CIBR",
       "related": [
         "FSLY",
         "AKAM",
@@ -250,6 +259,7 @@
       "ticker": "AMZN",
       "name": "Amazon",
       "sector": "E-commerce / Cloud (AWS)",
+      "sector_etf": "QQQ",
       "related": [
         "MSFT",
         "GOOGL",
@@ -279,9 +289,9 @@
       "ticker": "QCOM",
       "name": "Qualcomm",
       "sector": "Semiconductor / Mobile SoC",
+      "sector_etf": "SOXX",
       "related": [
         "AAPL",
-        "MTK",
         "AVGO",
         "ARM",
         "NVDA"
@@ -308,6 +318,7 @@
       "ticker": "NFLX",
       "name": "Netflix",
       "sector": "Streaming / Media",
+      "sector_etf": "XLC",
       "related": [
         "DIS",
         "WBD",

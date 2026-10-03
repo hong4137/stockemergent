@@ -133,7 +133,138 @@ def _post_with_param_recovery(httpx, model: str, prompt: str, max_retries: int =
     return response
 
 
-def summarize_event(ticker, news_data, price_data=None, sector_context=""):
+def _direction_move(price_data):
+    """분류 방향을 정할 움직임. 시간외 알림이면 종가 이후 움직임."""
+    if not price_data:
+        return None
+    if price_data.get("session") in ("pre", "post") and price_data.get("ext_change_pct") is not None:
+        return price_data["ext_change_pct"]
+    return price_data.get("change_pct", 0)
+
+
+def build_prompt(ticker, news_data, price_data=None, market_context=None, prev_alert=None):
+    """프롬프트와 링크 후보를 만든다. (API 호출 없이 테스트할 수 있게 분리)"""
+    from collectors.news_collector import analysis_view, format_age
+    from collectors.market_context import format_context_for_prompt
+
+    # 잡음 기사(가격 재탕·13F)는 빼고, 최신순 가중으로 정렬된 상위 10건
+    picked = analysis_view(news_data, limit=10)
+
+    news_text = ""
+    valid_urls = []
+    for i, n in enumerate(picked):
+        title = n.get("title", n.get("headline", ""))
+        source = (n.get("source", "") or "").split(":")[-1]
+        url = n.get("url", n.get("source_url", ""))
+        summary = (n.get("summary", "") or "")[:160]
+        # 기사 나이를 반드시 붙인다 — 없으면 AI가 3일 전 기사로 오늘 움직임을 설명한다
+        news_text += f"{i+1}. [{format_age(n.get('age_hours'))}] [{source}] {title}"
+        # Google News 요약은 '제목 + 매체명'의 반복이라 정보가 없다 — 토큰만 쓴다
+        if summary and not summary.lower().startswith(title.lower()[:40]):
+            news_text += f" -- {summary}"
+        news_text += "\n"
+        if _is_valid_article_url(url):
+            valid_urls.append(url)
+    if not news_text:
+        news_text = "(no relevant news found)\n"
+
+    # 언론사 직링크를 리다이렉터보다 우선 (정렬 안정성 유지)
+    valid_urls.sort(key=url_quality, reverse=True)
+
+    price_lines = ["no data"]
+    direction = ""
+    move = _direction_move(price_data)
+    if price_data:
+        pct = price_data.get("change_pct", 0)
+        z = price_data.get("z_change")
+        vol20 = price_data.get("vol20")
+        vol = price_data.get("volume_ratio", 1)
+        rev = price_data.get("intraday_reversal", 0)
+        session = price_data.get("session", "regular")
+
+        price_lines = []
+        if session in ("pre", "post") and price_data.get("ext_change_pct") is not None:
+            label = "Pre-market" if session == "pre" else "After-hours"
+            price_lines.append(f"{label}: {price_data['ext_change_pct']:+.1f}% since the last regular close "
+                               f"(that regular session was {pct:+.1f}%)")
+        else:
+            line = f"Regular session: {pct:+.1f}% vs previous close"
+            if z is not None and vol20:
+                line += f" = {z:+.1f} sigma (this stock's normal daily move is about {vol20:.1f}%)"
+            price_lines.append(line)
+            # 장중엔 '지금 시각까지 예상 거래량' 대비다 — 하루 평균과 비교한 값이 아니다
+            price_lines.append(f"Volume pace: {vol:.1f}x normal for this time of day")
+            if abs(rev) >= 2:
+                price_lines.append(f"Intraday reversal: {rev:+.1f}% from the day's "
+                                   f"{'high' if rev < 0 else 'low'}")
+
+        big = (abs(z) >= 2) if z is not None else (abs(move or 0) >= 3)
+        if move is not None and big:
+            direction = (f"WARNING: stock {'DOWN' if move < 0 else 'UP'} {move:+.1f}%. "
+                         f"You MUST explain the {'decline' if move < 0 else 'rise'}.")
+
+    ctx_text = format_context_for_prompt(move, market_context)
+
+    prev_text = ""
+    if prev_alert and prev_alert.get("headline"):
+        h = prev_alert.get("hours_ago")
+        when = f"{h:.0f}h ago" if h is not None else "earlier today"
+        prev_text = (f"\nEarlier alert today ({when}, stock was {prev_alert.get('change_pct', 0):+.1f}%): "
+                     f"\"{prev_alert['headline']}\". Focus on what is NEW since then. "
+                     "Repeat that explanation only if it is still clearly the main driver.\n")
+
+    prompt = (
+        f"You are a stock market analyst. Analyze why {ticker} stock is moving.\n\n"
+        "=== ABSOLUTE RULES ===\n"
+        "1. classification MUST match price direction:\n"
+        "   - Clearly down -> Fracture (NEVER Catalyst)\n"
+        "   - Clearly up -> Catalyst (NEVER Fracture)\n"
+        "   - Within this stock's normal daily range (|sigma| < 1, or within ±1.5% if sigma\n"
+        "     is not given) -> Noise, UNLESS a hard event (earnings, filing, lawsuit, M&A)\n"
+        "     clearly explains it. Do not invent a cause for a normal-sized move.\n"
+        "2. Use MARKET CONTEXT to judge scope. Call it sector_rotation or macro ONLY if the\n"
+        "   sector ETF or the market moved the same direction by a comparable amount.\n"
+        "   If the stock diverges from its sector by more than ~2.5 percentage points, the\n"
+        "   cause is company-specific: find it in the news, or say plainly that no\n"
+        "   company-specific news explains it. NEVER claim 'the sector fell' when the data\n"
+        "   shows the sector rose.\n"
+        "3. Each news item shows its age. Today's move is explained by recent news\n"
+        "   (roughly the last 24h). Older items are background, not the trigger.\n"
+        "4. Even if bullish news exists, if the stock is DOWN, explain the\n"
+        '   "declining despite positive news" pattern.\n'
+        "5. event_type definitions — pick precisely:\n"
+        "   - insider: the company's OWN officers/directors buying or selling\n"
+        "     their own shares (SEC Form 4). NOT outside investors.\n"
+        "   - institutional: outside funds, activists, or large holders taking\n"
+        "     or exiting a position (e.g. Pershing Square, ARK, 13F/13D moves).\n"
+        "   - regulatory: action by a government or regulator (fines, approvals,\n"
+        "     export controls, antitrust). NOT user backlash or public criticism.\n"
+        "   - controversy: public backlash, boycott, PR problem, or ethical\n"
+        "     dispute with no regulator involved.\n"
+        "   - sector_rotation: the sector moved together (see rule 2) and there is\n"
+        "     no company-specific cause.\n\n"
+        "=== PRICE ===\n"
+        + "\n".join(price_lines) + "\n"
+        + (direction + "\n" if direction else "")
+        + "\n=== MARKET CONTEXT ===\n"
+        + ctx_text + "\n"
+        + prev_text
+        + "\n=== NEWS (newest and most relevant first) ===\n"
+        + news_text
+        + "\n=== OUTPUT (JSON only, Korean for headline/detail) ===\n"
+        "{\n"
+        '  "headline": "core reason 1 line (Korean, max 20 chars)",\n'
+        '  "detail": "1-2 sentences (Korean, must match price direction and market context)",\n'
+        '  "classification": "Catalyst/Fracture/Noise",\n'
+        '  "confidence": 0.0~1.0,\n'
+        '  "event_type": "earnings/partnership/regulatory/macro/geopolitical/'
+        'analyst/product/sector_rotation/insider/institutional/controversy/other"\n'
+        "}"
+    )
+    return prompt, valid_urls, len(picked)
+
+
+def summarize_event(ticker, news_data, price_data=None, market_context=None, prev_alert=None):
     if not OPENAI_API_KEY:
         print("  ❌ OPENAI_API_KEY 미설정")
         return _fallback_summary(
@@ -143,91 +274,8 @@ def summarize_event(ticker, news_data, price_data=None, sector_context=""):
     try:
         import httpx
 
-        news_text = ""
-        valid_urls = []
-        for i, n in enumerate(news_data[:10]):
-            title = n.get("title", n.get("headline", ""))
-            source = n.get("source", "")
-            url = n.get("url", n.get("source_url", ""))
-            summary = n.get("summary", "")[:100]
-            news_text += f"{i+1}. [{source}] {title}"
-            if summary:
-                news_text += f" -- {summary}"
-            news_text += "\n"
-            if _is_valid_article_url(url):
-                valid_urls.append(url)
-
-        # 언론사 직링크를 리다이렉터보다 우선 (정렬 안정성 유지)
-        valid_urls.sort(key=url_quality, reverse=True)
-
-        price_text = "no data"
-        price_direction = ""
-        if price_data:
-            pct = price_data.get("change_pct", 0)
-            vol = price_data.get("volume_ratio", 1)
-            rev = price_data.get("intraday_reversal", 0)
-            price_text = f"vs prev close: {pct:+.1f}%, vol ratio: {vol:.1f}x"
-            if abs(rev) >= 2:
-                price_text += f", intraday reversal: {rev:+.1f}%"
-            if pct <= -3:
-                price_direction = (
-                    "WARNING: stock DOWN " + f"{pct:+.1f}%"
-                    + ". You MUST explain the decline."
-                )
-            elif pct >= 3:
-                price_direction = (
-                    "WARNING: stock UP " + f"{pct:+.1f}%"
-                    + ". You MUST explain the rise."
-                )
-            elif pct <= -1:
-                price_direction = f"Stock is down {pct:+.1f}%."
-            elif pct >= 1:
-                price_direction = f"Stock is up {pct:+.1f}%."
-
-        sector_line = ""
-        if sector_context:
-            sector_line = "\nSector context: " + sector_context
-
-        prompt = (
-            f"You are a stock market analyst. Analyze why {ticker} stock is moving.\n\n"
-            "=== ABSOLUTE RULES ===\n"
-            "1. classification MUST match price direction:\n"
-            "   - Down more than 1.5% -> Fracture (NEVER Catalyst)\n"
-            "   - Up more than 1.5% -> Catalyst (NEVER Fracture)\n"
-            "   - Between -1.5% and +1.5% -> Noise, UNLESS a hard event\n"
-            "     (earnings, filing, lawsuit, M&A) clearly explains the move.\n"
-            "     Do not invent a cause for a move this small.\n"
-            "2. If no clear company-specific cause (earnings, lawsuit, guidance), "
-            "consider macro/geopolitical factors: war, tariffs, interest rates, risk-off. "
-            'Set event_type to "geopolitical" or "macro".\n'
-            "3. Even if bullish news exists, if stock is DOWN, explain "
-            '"declining despite positive news" pattern.\n'
-            "4. event_type definitions — pick precisely:\n"
-            "   - insider: the company's OWN officers/directors buying or selling\n"
-            "     their own shares (SEC Form 4). NOT outside investors.\n"
-            "   - institutional: outside funds, activists, or large holders taking\n"
-            "     or exiting a position (e.g. Pershing Square, ARK, 13F/13D moves).\n"
-            "   - regulatory: action by a government or regulator (fines, approvals,\n"
-            "     export controls, antitrust). NOT user backlash or public criticism.\n"
-            "   - controversy: public backlash, boycott, PR problem, or ethical\n"
-            "     dispute with no regulator involved.\n"
-            "   - sector_rotation: the whole sector moved together and there is no\n"
-            "     company-specific cause.\n\n"
-            "=== DATA ===\n"
-            f"Price: {price_text}\n"
-            f"{price_direction}\n"
-            f"{sector_line}\n\n"
-            "News:\n"
-            f"{news_text}\n"
-            "=== OUTPUT (JSON only, Korean for headline/detail) ===\n"
-            "{\n"
-            '  "headline": "core reason 1 line (Korean, max 20 chars)",\n'
-            '  "detail": "1-2 sentences (Korean, must match price direction)",\n'
-            '  "classification": "Catalyst/Fracture/Noise",\n'
-            '  "confidence": 0.0~1.0,\n'
-            '  "event_type": "earnings/partnership/regulatory/macro/geopolitical/'
-            'analyst/product/sector_rotation/insider/institutional/controversy/other"\n'
-            "}"
+        prompt, valid_urls, used = build_prompt(
+            ticker, news_data, price_data, market_context, prev_alert
         )
 
         response = _post_with_param_recovery(httpx, OPENAI_MODEL, prompt)
@@ -264,16 +312,7 @@ def summarize_event(ticker, news_data, price_data=None, sector_context=""):
                   f"out:{usage.get('completion_tokens', 0)}"
                   + (f" (reasoning:{reasoning})" if reasoning else ""))
 
-        # Price direction override (safety net)
-        if price_data:
-            pct = price_data.get("change_pct", 0)
-            cls = result.get("classification", "Noise")
-            if pct <= -3 and cls == "Catalyst":
-                result["classification"] = "Fracture"
-                print(f"  Override: Catalyst->Fracture (price {pct:+.1f}%)")
-            elif pct >= 3 and cls == "Fracture":
-                result["classification"] = "Catalyst"
-                print(f"  Override: Fracture->Catalyst (price {pct:+.1f}%)")
+        apply_safety_nets(result, price_data, market_context)
 
         result["ai_generated"] = True
         result["model"] = OPENAI_MODEL
@@ -292,6 +331,35 @@ def summarize_event(ticker, news_data, price_data=None, sector_context=""):
         return _fallback_summary(
             ticker, news_data, price_data, fallback_reason=type(e).__name__
         )
+
+
+def apply_safety_nets(result, price_data=None, market_context=None):
+    """AI 응답을 데이터로 교정한다. result를 제자리에서 고친다."""
+    move = _direction_move(price_data)
+
+    # 1) 가격 방향과 반대되는 분류
+    if move is not None:
+        cls = result.get("classification", "Noise")
+        if move <= -3 and cls == "Catalyst":
+            result["classification"] = "Fracture"
+            print(f"  Override: Catalyst->Fracture (price {move:+.1f}%)")
+        elif move >= 3 and cls == "Fracture":
+            result["classification"] = "Catalyst"
+            print(f"  Override: Fracture->Catalyst (price {move:+.1f}%)")
+
+    # 2) 데이터와 모순되는 '섹터/매크로' 설명
+    #    섹터가 반대로 움직였거나, 종목이 섹터와 크게 벌어졌는데 섹터 탓을 하면
+    #    플레이북이 "개별 이슈 아님 — 대응 불필요"라는 틀린 조언을 낸다.
+    if market_context and move is not None and result.get("event_type") in (
+        "sector_rotation", "macro", "geopolitical"
+    ):
+        from collectors.market_context import assess_scope
+        scope = assess_scope(move, market_context)
+        if scope["scope"] == "idiosyncratic":
+            print(f"  Override: event_type {result['event_type']}->other "
+                  f"(섹터 대비 {scope['excess']:+.1f}%p — 섹터로 설명 안 됨)")
+            result["event_type"] = "other"
+            result["context_override"] = True
 
 
 def _fallback_summary(ticker, news_data, price_data=None, fallback_reason=""):

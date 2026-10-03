@@ -1,6 +1,8 @@
 """
-Stock Sentinel — Alert System v3.2
+Stock Sentinel — Alert System v5
 v3.2: 주말/장외 반복 알림 완전 차단 + 서머타임 자동 대응
+v5  : 세션 인식(휴장·지난 세션·시간외 실제 가격), σ 기준 단계,
+      같은 날 재알림은 '새로운 움직임'이 있을 때만, 시장 맥락 표시
 """
 import json
 from datetime import datetime, timedelta, timezone
@@ -13,7 +15,7 @@ from config.settings import (
     ALERT_COOLDOWN_MINUTES, NOISE_ALERTS_MAX_PER_DAY,
 )
 from storage.database import (
-    save_alert, get_last_alert_time, get_last_alert_psi,
+    save_alert, get_last_alert_time, get_last_alert_psi, get_last_alert,
     count_noise_alerts_today,
 )
 from alerts.telegram import sanitize_title
@@ -146,7 +148,8 @@ def resolve_playbook(cls_type: str, event_type: str = "") -> Dict:
         return EVENT_PLAYBOOKS[event_type]
     return PLAYBOOKS.get(cls_type, PLAYBOOKS["Noise"])
 
-PRICE_ALERT_LEVELS = [3, 5, 8, 12]
+PRICE_ALERT_LEVELS = [3, 5, 8, 12]   # σ를 모를 때 쓰는 % 단계
+Z_ALERT_LEVELS = [2, 3, 4.5, 6]      # 20일 σ 배수 단계
 
 
 def _get_current_level(abs_move: float) -> int:
@@ -159,6 +162,32 @@ def _get_current_level(abs_move: float) -> int:
     return level
 
 
+def _move_level(move: float, vol20: Optional[float]) -> int:
+    """변동 단계. σ를 알면 σ 배수로, 모르면 % 고정 단계로 잰다."""
+    if move is None:
+        return 0
+    if vol20:
+        z = abs(move) / vol20
+        return sum(1 for c in Z_ALERT_LEVELS if z >= c)
+    return _get_current_level(abs(move))
+
+
+def effective_move(price_data: Optional[Dict]) -> float:
+    """알림 근거가 되는 움직임.
+
+    시간외: 종가 이후 움직임 / 정규장: 전일 대비 또는 (더 크면) 장중 반전
+    """
+    if not price_data:
+        return 0.0
+    if price_data.get("session") in ("pre", "post"):
+        return price_data.get("ext_change_pct") or 0.0
+    change = price_data.get("change_pct", 0) or 0.0
+    rev = price_data.get("intraday_reversal", 0) or 0.0
+    if abs(rev) > abs(change) and abs(rev) >= 3:
+        return rev
+    return change
+
+
 def _get_et_now():
     """미국 동부시간 (서머타임 자동 대응)"""
     try:
@@ -169,32 +198,11 @@ def _get_et_now():
         return datetime.now(timezone(timedelta(hours=-4)))
 
 
-def _is_market_open() -> bool:
-    """미국 정규장 오픈 중인지 (ET 09:30-16:00, 평일만)"""
-    now_et = _get_et_now()
-    if now_et.weekday() >= 5:
-        return False
-    hour, minute = now_et.hour, now_et.minute
-    if hour < 9 or (hour == 9 and minute < 30):
-        return False
-    if hour >= 16:
-        return False
-    return True
-
-
-def _is_extended_hours() -> bool:
-    """프리마켓/애프터마켓 (ET 04:00-09:30, 16:00-20:00, 평일만)"""
-    now_et = _get_et_now()
-    if now_et.weekday() >= 5:
-        return False
-    hour, minute = now_et.hour, now_et.minute
-    # 프리마켓 04:00-09:30
-    if 4 <= hour < 9 or (hour == 9 and minute < 30):
-        return True
-    # 애프터마켓 16:00-20:00
-    if 16 <= hour < 20:
-        return True
-    return False
+def _et_date(iso_utc: str):
+    dt = datetime.fromisoformat(iso_utc)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(_get_et_now().tzinfo).date()
 
 
 def _is_article_url(url: str) -> bool:
@@ -208,110 +216,119 @@ def generate_alert_id(ticker: str) -> str:
     return f"SEN-{now.strftime('%Y%m%d')}-{ticker}-{now.strftime('%H%M%S')}"
 
 
+def same_day_previous_alert(ticker: str) -> Optional[Dict]:
+    """오늘(ET) 이미 보낸 이 종목의 마지막 알림"""
+    last = get_last_alert(ticker)
+    if not last:
+        return None
+    try:
+        if _et_date(last["timestamp"]) != _get_et_now().date():
+            return None
+    except Exception:
+        return None
+    return last
+
+
 def should_send_alert(
     ticker: str,
     classification: str,
     change_pct: float = 0,
     intraday_reversal: float = 0,
+    price_data: Dict = None,
 ) -> bool:
     """
-    v3.2 — 알림 발송 판단
+    v5 — 알림 발송 판단 (트리거 자체는 상위에서 σ 기준으로 이미 걸러졌다)
 
-    시간대별 규칙:
-    1. 주말/야간(장외+프리/애프터 아님): 알림 완전 차단
-    2. 프리/애프터마켓: 10%+ 급변동만 허용
-    3. 정규장: 단계별 임계치 적용
-
-    단계별 규칙 (정규장):
-    - 새 단계 돌파 시 즉시 알림
-    - 같은 단계 내: 2시간 쿨다운
-    - 8%+ 고변동: 30분 간격
-    - 장중 반전: 새 단계일 때만 (같은 단계 반복 차단)
+    1. 세션 게이트
+       - 장외(야간·주말): 차단
+       - 정규장인데 오늘 일봉이 없음(휴장일·데이터 지연): 차단
+       - 시간외: '종가 이후' 움직임이 10% 이상일 때만.
+         예전엔 정규장 일봉(=이미 끝난 세션의 변동)을 읽어서, 9/14 PANW +13.1%를
+         그날 저녁 2번, 다음 날 새벽 1번 다시 알렸다.
+    2. 최소 간격 15분
+    3. 오늘 첫 알림이면 발송
+    4. 같은 날 재알림은 '새로운 움직임'이 있을 때만
+       - 변동 단계 상승 (σ 2/3/4.5/6배, σ 모르면 3/5/8/12%)
+       - 직전 알림 대비 추가 변동 ≥ max(2%p, 1σ) — 되돌림·방향 전환 포함
+       시간만 지났다고 같은 이야기를 반복하지 않는다
+       (예: PANW 8/21 "AI 보안 기대감에 상승" 하루 5회).
     """
+    from collectors.price_collector import market_session, EXT_MOVE
 
-    # ── 1. 시간대 체크 ──
-    if not _is_market_open() and not _is_extended_hours():
-        # 주말/야간: 완전 차단 (어떤 변동이든)
-        print(f"  🌙 장외(주말/야간) — 알림 차단")
+    pd_ = price_data or {}
+    if not pd_:
+        pd_ = {"change_pct": change_pct, "intraday_reversal": intraday_reversal}
+    now_et = _get_et_now()
+    session = pd_.get("session") or market_session(now_et)
+    vol20 = pd_.get("vol20")
+
+    # ── 1. 세션 게이트 ──
+    if session == "closed":
+        print("  🌙 장외(야간/주말) — 알림 차단")
         return False
-
-    if not _is_market_open() and _is_extended_hours():
-        # 프리/애프터마켓: 10%+ 급변동만
-        effective = max(abs(change_pct), abs(intraday_reversal))
-        if effective < 10:
-            print(f"  🌅 프리/애프터마켓 — {effective:.1f}% < 10% 차단")
+    if session == "regular" and pd_.get("stale"):
+        print(f"  🗓 오늘 일봉 없음(휴장/데이터 지연) — 지난 세션"
+              f"({pd_.get('session_date')}) 변동으로는 알리지 않음")
+        return False
+    extended = session in ("pre", "post")
+    if extended:
+        ext = pd_.get("ext_change_pct")
+        if ext is None or abs(ext) < EXT_MOVE:
+            shown = f"{ext:+.1f}%" if ext is not None else "확인 불가"
+            print(f"  🌅 시간외 — 종가 이후 {shown}, {EXT_MOVE:.0f}% 미만 차단")
             return False
-        print(f"  🚨 프리/애프터마켓 — {effective:.1f}% 급변동 알림!")
 
-    # ── 2. 쿨다운 체크 ──
-    last_time = get_last_alert_time(ticker)
-    hours_since = 999
+    cur_move = effective_move(pd_)
 
-    if last_time:
+    # ── 2. 최소 간격 ──
+    last = get_last_alert(ticker)
+    if last:
         try:
-            last_dt = datetime.fromisoformat(last_time)
-            diff = datetime.utcnow() - last_dt
-            hours_since = diff.total_seconds() / 3600
-
-            # 최소 쿨다운: 15분
+            hours_since = (datetime.utcnow() - datetime.fromisoformat(last["timestamp"])
+                           ).total_seconds() / 3600
             if hours_since < 0.25:
                 print(f"  ⏳ 쿨다운 15분 미경과 ({ticker})")
                 return False
-        except:
+        except Exception:
             pass
 
-    # ── 3. 단계별 판단 (정규장) ──
-    effective_move = max(abs(change_pct), abs(intraday_reversal))
-    current_level = _get_current_level(effective_move)
-
-    last_psi_data = get_last_alert_psi(ticker)
-    prev_level = 0
-    if last_psi_data:
-        prev_change = abs(last_psi_data.get("change_pct", 0))
-        prev_level = _get_current_level(prev_change)
-
-    # 새 거래일 시작 (6시간+ 경과 + 정규장) → 리셋
-    if hours_since >= 6 and _is_market_open():
-        print(f"  ✅ 새 거래일 리셋")
+    # ── 3. 오늘 첫 알림 ──
+    prev = same_day_previous_alert(ticker)
+    if not prev:
+        print("  ✅ 오늘 첫 알림")
         return True
 
-    # 장중 반전 3%+ → 새 단계일 때만
-    if abs(intraday_reversal) >= 3:
-        reversal_level = _get_current_level(abs(intraday_reversal))
-        if reversal_level > prev_level:
-            print(f"  🔄 반전 새 단계: {prev_level}->{reversal_level}")
-            return True
-        if hours_since >= 2:
-            print(f"  ✅ 반전 2시간+ 경과, 재알림")
-            return True
-        print(f"  ⏳ 반전 같은 단계 ({reversal_level}), 중복 차단")
-        return False
-
-    # 새 단계 돌파
-    if current_level > prev_level:
-        threshold = PRICE_ALERT_LEVELS[current_level - 1] if current_level > 0 else 0
-        print(f"  📊 레벨 상승: {prev_level}->{current_level} ({threshold}%+)")
+    prev_extended = prev.get("trigger_type") == "extended_move"
+    if extended != prev_extended:
+        # 정규장 알림 뒤 첫 시간외 알림(또는 반대) — 잣대가 다르므로 새 정보다
+        print("  ✅ 세션 전환 후 첫 알림")
         return True
 
-    # 8%+ (레벨3) → 30분 간격
-    if current_level >= 3 and hours_since >= 0.5:
-        print(f"  🚨 고변동 ({effective_move:.1f}%), 30분 경과")
+    # ── 4. 같은 날 재알림 ──
+    prev_move = prev.get("alert_move")
+    if prev_move is None:  # v5 이전 알림
+        prev_move = prev.get("change_pct") or 0.0
+    cur_level = _move_level(cur_move, vol20)
+    prev_level = _move_level(prev_move, vol20)
+    if cur_level > prev_level:
+        print(f"  📊 단계 상승 {prev_level}→{cur_level} ({cur_move:+.1f}%)")
         return True
 
-    # Noise 일일 한도
+    # 가격 위치 비교: 정규장은 전일 대비 변동끼리, 시간외는 시간외 변동끼리
+    cur_pos = cur_move if extended else (pd_.get("change_pct") or 0.0)
+    prev_pos = prev_move if extended else (prev.get("change_pct") or 0.0)
+    step = max(2.0, vol20 or 0.0)
+    if abs(cur_pos - prev_pos) >= step:
+        print(f"  📈 직전 알림 대비 추가 변동 {prev_pos:+.1f}% → {cur_pos:+.1f}% (기준 {step:.1f}%p)")
+        return True
+
     if classification in ("Noise", "노이즈"):
-        noise_count = count_noise_alerts_today(ticker)
-        if noise_count >= NOISE_ALERTS_MAX_PER_DAY:
-            print(f"  🔇 노이즈 일일 한도")
+        if count_noise_alerts_today(ticker) >= NOISE_ALERTS_MAX_PER_DAY:
+            print("  🔇 노이즈 일일 한도")
             return False
 
-    # 같은 단계 → 2시간 쿨다운
-    if current_level <= prev_level:
-        if hours_since < 2:
-            print(f"  ⏳ 같은 단계 ({current_level}), 2시간 쿨다운")
-            return False
-
-    return True
+    print(f"  ⏸ 오늘 이미 알림 — 새로운 움직임 없음 ({prev_pos:+.1f}% → {cur_pos:+.1f}%)")
+    return False
 
 
 # ── 알림 포맷 ──
@@ -322,6 +339,7 @@ def format_telegram_alert(
     flash_result: Dict,
     ai_summary: Dict = None,
     price_data: Dict = None,
+    market_context: Dict = None,
 ) -> str:
     psi = psi_result.get("psi_total", 0)
     details = psi_result.get("details", {})
@@ -357,11 +375,18 @@ def format_telegram_alert(
     if price_data:
         pct = price_data.get("change_pct", 0)
         rev = price_data.get("intraday_reversal", 0)
-        if abs(pct) >= 0.5:
-            price_line = f"{pct:+.1f}%"
-        if abs(rev) >= 3:
-            rev_dir = "고점대비" if rev < 0 else "저점대비"
-            price_line += f" ({rev_dir} {rev:+.1f}%)"
+        z = price_data.get("z_change")
+        if price_data.get("session") in ("pre", "post") and price_data.get("ext_change_pct") is not None:
+            label = "프리마켓" if price_data["session"] == "pre" else "시간외"
+            price_line = f"{label} {price_data['ext_change_pct']:+.1f}% (정규장 {pct:+.1f}%)"
+        else:
+            if abs(pct) >= 0.5:
+                price_line = f"{pct:+.1f}%"
+                if z is not None:
+                    price_line += f" ({abs(z):.1f}σ)"
+            if abs(rev) >= 3:
+                rev_dir = "고점대비" if rev < 0 else "저점대비"
+                price_line += f" ({rev_dir} {rev:+.1f}%)"
     else:
         pf = details.get("price_boost", {}).get("factors", [])
         if pf:
@@ -382,13 +407,22 @@ def format_telegram_alert(
     msg += "\n"
     msg += f"{cls_emoji} {cls_kr} ({confidence:.0%}) | PSI {psi:.1f}\n"
 
+    # 섹터 전체가 움직인 건지, 이 종목만 움직인 건지 한눈에 보이게
+    if market_context:
+        from collectors.market_context import format_context_for_alert
+        ctx_line = format_context_for_alert(
+            (price_data or {}).get("change_pct"), market_context
+        )
+        if ctx_line:
+            msg += ctx_line + "\n"
+
     src_count = (
         ai_summary.get("source_count", len(candidates))
         if ai_summary
         else len(candidates)
     )
     if src_count:
-        msg += f"📰 {src_count}개 매체\n"
+        msg += f"📰 관련 기사 {src_count}건\n"
 
     # 핵심 소스 URL
     key_url = ""
@@ -445,6 +479,7 @@ def send_alert(
     news_data: List[Dict] = None,
     price_data: Dict = None,
     force: bool = False,
+    market_context: Dict = None,
 ) -> bool:
     classification = flash_result.get("classification", {})
     cls_type = classification.get("type", "Unknown")
@@ -458,22 +493,41 @@ def send_alert(
     # 발송 여부를 먼저 판정한다. AI 요약을 앞에서 돌리면 주말/쿨다운으로 차단될
     # 건에도 OpenAI 비용이 그대로 나간다. 게이트에 쓰이는 분류는 규칙 기반으로 충분하다
     # (AI 분류는 Noise 일일한도 판정에만 쓰였고, Noise는 전체의 0.1%다).
-    if not force and not should_send_alert(ticker, cls_type, change_pct, intraday_reversal):
+    if not force and not should_send_alert(
+        ticker, cls_type, change_pct, intraday_reversal, price_data=price_data
+    ):
         return False
 
     # 여기서부터는 발송이 확정된 건이다.
+    # 오늘 이미 보낸 알림이 있으면 AI에게 알려서 같은 설명을 반복하지 않게 한다.
+    prev = same_day_previous_alert(ticker)
+    prev_alert = None
+    if prev and prev.get("headline"):
+        try:
+            hours = (datetime.utcnow() - datetime.fromisoformat(prev["timestamp"])
+                     ).total_seconds() / 3600
+        except Exception:
+            hours = None
+        prev_alert = {"headline": prev["headline"], "hours_ago": hours,
+                      "change_pct": prev.get("change_pct")}
+
     ai_summary = None
     try:
         from engines.ai_summarizer import summarize_event
         if news_data:
-            ai_summary = summarize_event(ticker, news_data, price_data)
+            ai_summary = summarize_event(
+                ticker, news_data, price_data,
+                market_context=market_context, prev_alert=prev_alert,
+            )
             if ai_summary and ai_summary.get("ai_generated"):
                 cls_type = ai_summary.get("classification", cls_type)
     except Exception as e:
         print(f"  ❌ AI 요약 호출 실패: {type(e).__name__}: {e}")
 
     sent_via = "console"
-    tg_msg = format_telegram_alert(ticker, psi_result, flash_result, ai_summary, price_data)
+    tg_msg = format_telegram_alert(
+        ticker, psi_result, flash_result, ai_summary, price_data, market_context
+    )
     print(tg_msg)
 
     try:
@@ -508,6 +562,10 @@ def send_alert(
         ai_generated=ai.get("ai_generated", False),
         key_source=ai.get("key_source", ""),
         model=ai.get("model", ""),
+        z_score=(price_data or {}).get("z_change"),
+        session=(price_data or {}).get("session", ""),
+        market_context=market_context,
+        alert_move=round(effective_move(price_data), 2) if price_data else None,
     )
 
     print(f"  Alert: {alert_id}")

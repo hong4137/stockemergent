@@ -193,6 +193,10 @@ class PreSignalEngine:
             title = (n.get("title") or n.get("headline") or "").lower()
             if not title:
                 continue
+            # 가격 재탕·13F 보고서는 '사실'이 아니다. "Stock Price Up 2% - Still a Buy?"의
+            # 'upgrade'류 단어가 사건처럼 집계되지 않게 한다.
+            if n.get("noise"):
+                continue
             if n.get("source_type") == "filing":
                 filings += 1
                 continue
@@ -226,57 +230,70 @@ class PreSignalEngine:
     # 보조 계산
     # =========================================================
     def _calc_price_boost(self, price_data: Dict) -> Tuple[float, Dict]:
-        """
-        가격 충격 부스트: 큰 가격 변동 자체가 이상 신호
-        전일 대비: ±2% → +1.0, ±5% → +2.0, ±8% → +3.0, ±10%+ → +4.0
-        장중 반전: ±3%+ 반전도 동일 기준 적용
-        거래량 3x 이상 시 추가 +0.5
-        """
-        boost = 0.0
-        details = {"factors": []}
+        """가격 충격 부스트 — 종목 자신의 변동성(σ) 대비로 잰다.
 
+        정규장: 전일 대비 변동 또는 장중 반전을 20일 σ로 나눈 값
+                2σ → +1, 3σ → +2, 4.5σ → +3, 6σ → +4  (σ 없으면 2/5/8/10% 고정 기준)
+        시간외: 종가 이후 움직임을 고정 기준으로
+        장외·지난 세션 데이터: 0 — 이미 지나간 움직임은 '지금의' 신호가 아니다
+        거래량 페이스 3배 이상: +0.5 (정규장만)
+        """
+        details = {"factors": []}
         if not price_data:
             return 0.0, details
 
-        # 전일 대비 변동률
-        change_pct = abs(price_data.get("change_pct", 0))
+        session = price_data.get("session", "regular")
+        stale = price_data.get("stale", False)
 
-        # 장중 반전폭 (고점→하락 or 저점→반등)
-        reversal = abs(price_data.get("intraday_reversal", 0))
+        if session in ("pre", "post"):
+            ext = price_data.get("ext_change_pct")
+            if ext is None:
+                return 0.0, details
+            boost = self._tier(abs(ext), (2, 5, 8, 10))
+            if boost:
+                details["factors"].append(f"시간외 {ext:+.1f}% → +{boost:.1f}")
+            return boost, details
 
-        # 더 큰 쪽을 사용 (전일 대비 vs 장중 반전)
-        effective_move = max(change_pct, reversal)
-        move_label = ""
+        if session != "regular" or stale:
+            return 0.0, details
 
-        if reversal > change_pct and reversal >= 3:
-            raw_rev = price_data.get("intraday_reversal", 0)
-            if raw_rev < 0:
-                move_label = f"장중 고점 대비 {raw_rev:+.1f}% 급락"
-            else:
-                move_label = f"장중 저점 대비 {raw_rev:+.1f}% 반등"
+        change = price_data.get("change_pct", 0)
+        reversal = price_data.get("intraday_reversal", 0)
+        vol20 = price_data.get("vol20")
+
+        use_rev = abs(reversal) > abs(change) and abs(reversal) >= 3
+        move = reversal if use_rev else change
+        if use_rev:
+            label = (f"장중 고점 대비 {reversal:+.1f}% 급락" if reversal < 0
+                     else f"장중 저점 대비 {reversal:+.1f}% 반등")
         else:
-            move_label = f"가격 변동 {price_data.get('change_pct', 0):+.1f}%"
+            label = f"가격 변동 {change:+.1f}%"
 
-        if effective_move >= 10:
-            boost += 4.0
-            details["factors"].append(f"{move_label} → +4.0")
-        elif effective_move >= 8:
-            boost += 3.0
-            details["factors"].append(f"{move_label} → +3.0")
-        elif effective_move >= 5:
-            boost += 2.0
-            details["factors"].append(f"{move_label} → +2.0")
-        elif effective_move >= 2:
-            boost += 1.0
-            details["factors"].append(f"{move_label} → +1.0")
+        if vol20:
+            z = abs(move) / vol20
+            boost = self._tier(z, (2, 3, 4.5, 6))
+            label += f" ({z:.1f}σ)"
+        else:
+            boost = self._tier(abs(move), (2, 5, 8, 10))
 
-        # 거래량 급증
+        if boost:
+            details["factors"].append(f"{label} → +{boost:.1f}")
+
         vol_ratio = price_data.get("volume_ratio", 1.0)
         if vol_ratio >= 3:
             boost += 0.5
-            details["factors"].append(f"거래량 {vol_ratio:.1f}x 평균 → +0.5")
+            details["factors"].append(f"거래량 페이스 {vol_ratio:.1f}x → +0.5")
 
         return min(4.5, boost), details
+
+    @staticmethod
+    def _tier(value: float, cuts: tuple) -> float:
+        """cuts = (1단계, 2단계, 3단계, 4단계) 경계값 → 0~4점"""
+        score = 0.0
+        for i, c in enumerate(cuts, start=1):
+            if value >= c:
+                score = float(i)
+        return score
 
     def _calc_noise_penalty(self, att_score: float, fact_score: float) -> float:
         """일상 노이즈 보정"""
@@ -307,7 +324,8 @@ class FlashReasonEngine:
         candidates = []
         seen = set()
 
-        for n in news[:15]:
+        from collectors.news_collector import analysis_view
+        for n in analysis_view(news, limit=15):
             title = n.get("title", n.get("headline", ""))
             if not title or title in seen:
                 continue
@@ -318,7 +336,8 @@ class FlashReasonEngine:
                 "source": n.get("source", ""),
                 "source_url": n.get("url", n.get("source_url", "")),
                 "summary": n.get("summary", "")[:200],
-                "relevance": 0.5,
+                "relevance": n.get("relevance", 0.5),
+                "age_hours": n.get("age_hours"),
             })
 
         return candidates[:10]

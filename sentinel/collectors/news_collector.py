@@ -16,6 +16,7 @@ from config.settings import (
     WATCHMAP, NEWS_RSS_FEEDS, FINNHUB_API_KEY,
     BREAKING_KEYWORDS, POSITIVE_KEYWORDS, NEGATIVE_KEYWORDS
 )
+from collectors.noise_filter import classify_noise
 
 
 def collect_google_news(ticker: str, hours: int = 24) -> List[Dict]:
@@ -123,7 +124,9 @@ def collect_finnhub_news(ticker: str, hours: int = 72) -> List[Dict]:
         articles = resp.json()
         
         for a in articles[:30]:
-            pub_time = datetime.fromtimestamp(a.get('datetime', 0))
+            # 다른 소스와 같은 기준(naive UTC)으로 맞춘다. fromtimestamp()는 실행
+            # 머신의 로컬 시각을 돌려줘서 로컬 테스트 시 기사 나이가 9시간 틀어졌다.
+            pub_time = datetime.utcfromtimestamp(a.get('datetime', 0))
             title = a.get('headline', '')
             summary = a.get('summary', '')
             link = a.get('url', '')
@@ -402,18 +405,80 @@ def collect_all_news(ticker: str) -> Dict:
         if s <= 0:
             continue
         a["relevance"] = round(s, 2)
+        a["age_hours"] = _age_hours(a.get("timestamp"))
+        a["noise"] = classify_noise(a.get("title", ""))
+        a["rank"] = round(_rank(a), 3)
         scored.append(a)
 
-    # 관련도 높은 순 — AI 요약은 상위 10건만 보므로 정렬이 곧 입력 품질이다
-    scored.sort(key=lambda x: x["relevance"], reverse=True)
+    # AI 요약은 상위 10건만 보므로 정렬이 곧 입력 품질이다.
+    # 관련도만으로 정렬하면 1.0점 동점이 많아 하루 지난 기사가 앞에 섰다
+    # (실측: AI 입력 10건 중 6시간 이내 기사는 1~2건, 평균 8~26시간 전).
+    scored.sort(key=lambda x: x["rank"], reverse=True)
 
     dropped_dup = raw_count - len(deduped)
     dropped_irr = len(deduped) - len(scored)
+    noisy = sum(1 for a in scored if a["noise"])
+    fresh = sum(1 for a in scored if (a["age_hours"] or 99) <= 6)
     print(f"  ✅ {raw_count}건 수집 → 중복 {dropped_dup}건, 무관 {dropped_irr}건 제외 "
-          f"→ {len(scored)}건 사용")
+          f"→ {len(scored)}건 (잡음 {noisy}건 후순위, 6시간 이내 {fresh}건)")
 
-    # 기존 호출부가 .values()로 순회하므로 dict 형태를 유지한다
+    # 기존 호출부가 .values()로 순회하므로 dict 형태를 유지한다.
+    # 잡음 기사도 남겨둔다 — 언론 관심도(attention) 집계에는 포함돼야 하고,
+    # 분석 입력에서 뺄지는 analysis_view()가 정한다.
     return {"filtered": scored}
+
+
+def _age_hours(ts: str) -> Optional[float]:
+    """기사 나이(시간). 공시처럼 날짜만 있으면 그날 자정 기준."""
+    if not ts:
+        return None
+    try:
+        t = datetime.fromisoformat(str(ts)[:19])
+    except ValueError:
+        return None
+    if t.tzinfo is not None:
+        t = t.replace(tzinfo=None)
+    return max(0.0, (datetime.utcnow() - t).total_seconds() / 3600)
+
+
+def _rank(a: Dict) -> float:
+    """관련도 + 최신성 − 잡음.
+
+    최신성: 방금 나온 기사 +0.3, 24시간 지나면 0, 48시간 넘으면 -0.1.
+    잡음(가격 재탕·13F 보고서): -1.0 → 정상 기사(관련도 0.5 이상) 뒤로 밀린다.
+    """
+    score = a.get("relevance", 0)
+    age = a.get("age_hours")
+    if age is not None:
+        score += max(0.0, 0.3 * (1 - age / 24))
+        if age > 48:
+            score -= 0.1
+    if a.get("noise"):
+        score -= 1.0
+    return score
+
+
+def analysis_view(news: List[Dict], limit: int = 10, min_clean: int = 3) -> List[Dict]:
+    """AI 요약·원인 후보에 넣을 기사.
+
+    잡음이 아닌 기사가 min_clean건 이상이면 그것만 쓰고, 부족하면 잡음 기사로 채운다.
+    (무엇이라도 보여주는 게 아무것도 없는 것보다 낫다)
+    """
+    ordered = sorted(news, key=lambda x: x.get("rank", x.get("relevance", 0)), reverse=True)
+    clean = [a for a in ordered if not a.get("noise")]
+    if len(clean) >= min_clean:
+        return clean[:limit]
+    return ordered[:limit]
+
+
+def format_age(hours: Optional[float]) -> str:
+    if hours is None:
+        return "time unknown"
+    if hours < 1:
+        return f"{max(1, int(hours * 60))}m ago"
+    if hours < 48:
+        return f"{int(hours)}h ago"
+    return f"{int(hours // 24)}d ago"
 
 
 # ============================================================
@@ -447,16 +512,10 @@ def _resolve_google_news_url(entry) -> tuple:
         if match:
             return match.group(1), source_name
     
-    # 3. Google News 리다이렉트 → HEAD 요청
-    if 'news.google.com' in link:
-        try:
-            resp = requests.head(link, allow_redirects=True, timeout=5,
-                                headers={"User-Agent": "Mozilla/5.0"})
-            if resp.url and 'news.google.com' not in resp.url:
-                return resp.url, source_name
-        except:
-            pass
-    
+    # (예전 3단계: 기사마다 HEAD 요청으로 리다이렉트를 풀었다. Google News는 2024년
+    #  이후 실제 URL로 리다이렉트하지 않아 한 번도 성공하지 못했고, 종목당 최대
+    #  40회 × 5초 타임아웃으로 실행 시간만 잡아먹었다. 리다이렉터 링크도 클릭하면
+    #  기사로 연결되므로 그대로 쓴다.)
     return link, source_name
 
 def _simple_sentiment(text: str) -> str:
@@ -480,8 +539,10 @@ def has_breaking_keywords(text: str) -> bool:
 
 
 def _clean_html(text: str) -> str:
-    """HTML 태그 제거"""
-    return re.sub(r'<[^>]+>', '', text).strip()
+    """HTML 태그·엔티티 제거 (&nbsp; 등이 그대로 AI 입력에 들어가던 문제)"""
+    import html
+    text = re.sub(r'<[^>]+>', ' ', text or "")
+    return re.sub(r'\s+', ' ', html.unescape(text)).strip()
 
 
 # ============================================================

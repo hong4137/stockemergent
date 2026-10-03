@@ -1,0 +1,25 @@
+name = "stock-sentinel-scheduler"
+main = "worker.js"
+compatibility_date = "2026-09-01"
+
+# GET 요청은 알람을 '무장'만 한다(스캔을 직접 실행하지 않음). 스캔 워크플로가
+# 매 실행마다 이 주소를 호출해 알람 체인이 끊겨도 스스로 복구되게 한다.
+workers_dev = true
+preview_urls = false
+
+# 크론 트리거는 계정 무료 한도(5개)가 차 있어 쓰지 않는다 — Durable Object 알람으로 대신한다.
+[[durable_objects.bindings]]
+name = "CLOCK"
+class_name = "Clock"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Clock"]
+
+[vars]
+GITHUB_REPO = "hong4137/stockemergent"
+WORKFLOW_FILE = "sentinel-scan.yml"
+GITHUB_REF = "main"
+
+[observability]
+enabled = true

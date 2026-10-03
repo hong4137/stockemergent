@@ -39,6 +39,13 @@ ALERTS_COLUMNS = [
     ("ai_generated", "INTEGER DEFAULT 0"),
     ("key_source", "TEXT DEFAULT ''"),
     ("model", "TEXT DEFAULT ''"),
+    # ── v5: 판단 근거를 남긴다 (사후에 '섹터 설명이 맞았나' 검증용) ──
+    ("z_score", "REAL"),
+    ("session", "TEXT DEFAULT ''"),
+    ("market_context", "TEXT DEFAULT ''"),
+    # 알림을 정당화한 움직임(반전 알림이면 반전폭, 시간외면 시간외 변동).
+    # change_pct만 저장하면 반전 알림 뒤 같은 반전을 매번 '단계 상승'으로 오인한다.
+    ("alert_move", "REAL"),
 ]
 
 
@@ -132,6 +139,10 @@ def save_alert(
     ai_generated: bool = False,
     key_source: str = "",
     model: str = "",
+    z_score: float = None,
+    session: str = "",
+    market_context: dict = None,
+    alert_move: float = None,
 ):
     conn = _connect()
     c = conn.cursor()
@@ -140,13 +151,16 @@ def save_alert(
            (alert_id, ticker, timestamp, trigger_type, psi_total,
             classification, confidence, reason_candidates,
             playbook_id, playbook_actions, sent_via, change_pct,
-            headline, detail, event_type, ai_generated, key_source, model)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            headline, detail, event_type, ai_generated, key_source, model,
+            z_score, session, market_context, alert_move)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             alert_id, ticker, timestamp, trigger_type, psi_total,
             classification, confidence, json.dumps(reason_candidates),
             playbook_id, json.dumps(playbook_actions), sent_via, change_pct,
             headline, detail, event_type, int(bool(ai_generated)), key_source, model,
+            z_score, session, json.dumps(market_context or {}, ensure_ascii=False),
+            alert_move,
         ),
     )
     conn.commit()
@@ -212,6 +226,19 @@ def get_last_alert_time(ticker: str) -> Optional[str]:
     row = c.fetchone()
     conn.close()
     return row["timestamp"] if row else None
+
+
+def get_last_alert(ticker: str) -> Optional[Dict]:
+    """해당 종목의 마지막 알림 전체 행"""
+    conn = _connect()
+    c = conn.cursor()
+    c.execute(
+        "SELECT * FROM alerts WHERE ticker = ? ORDER BY timestamp DESC LIMIT 1",
+        (ticker,),
+    )
+    row = c.fetchone()
+    conn.close()
+    return dict(row) if row else None
 
 
 def get_last_alert_psi(ticker: str) -> Optional[Dict]:

@@ -1,16 +1,16 @@
 name: "📡 Stock Sentinel Scan"
 
 on:
+  # 주 실행 경로는 Cloudflare Worker(scheduler/)가 15분마다 보내는 workflow_dispatch다.
+  # GitHub의 schedule은 보장되지 않아(실측: 평일 정규장 스캔 하루 2~3회) 주 경로로 쓸 수 없다.
+  #
+  # 아래 cron은 '백업'이다. 워커가 멈추거나(토큰 만료 등) 해도 스캔이 완전히 끊기지
+  # 않게 정규장 시간대(EDT·EST 모두 덮는 UTC 13~20시)에 둔다. 정각·15분 단위는
+  # GitHub 부하가 몰려 누락이 잦으므로 8/23/38/53분에 건다. 워커와 겹쳐도
+  # concurrency로 순서대로 돌고, 같은 날 재알림 규칙이 중복 발송을 막는다.
+  # 야간·주말 스케줄은 없앴다 — 알림이 전면 차단되는 시간대라 무료 분만 소모했다.
   schedule:
-    # 장중 (ET 09:00-16:00 = UTC 14:00-21:00): 15분 간격, 평일
-    - cron: '*/15 13-20 * * 1-5'
-    # 장후: 30분 간격. 위 스케줄과 UTC 20시가 겹치면 같은 시각에 두 번 돌아
-    # 일일요약이 중복 발송되므로 21시부터 시작한다.
-    - cron: '0,30 21-23 * * 1-5'
-    # 장외 야간: 1시간 간격
-    - cron: '0 0-12 * * 1-5'
-    # 주말: 4시간
-    - cron: '0 */4 * * 0,6'
+    - cron: '8,23,38,53 13-20 * * 1-5'
 
   workflow_dispatch:
     inputs:
@@ -27,11 +27,25 @@ on:
 permissions:
   contents: write
 
+# 워커 실행과 백업 cron이 겹쳐도 한 번에 하나씩만 돈다.
+# 동시에 돌면 둘 다 sentinel.db를 커밋하려다 한쪽 push가 거부돼 기록이 유실된다.
+concurrency:
+  group: sentinel-scan
+  cancel-in-progress: false
+
 jobs:
   scan:
     runs-on: ubuntu-latest
+    # 기본값은 360분이다. yfinance 응답이 멈추면 한 번에 6시간치 무료 분이 사라진다.
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
+
+      # 스케줄러 워커의 알람 체인이 끊겼으면 다시 무장한다 (이미 무장돼 있으면 아무 일 없음).
+      # GET은 무장만 하고 스캔을 실행하지 않는다.
+      - name: ⏰ Re-arm scheduler
+        continue-on-error: true
+        run: curl -fsS --max-time 10 https://stock-sentinel-scheduler.hong4137.workers.dev/
 
       - uses: actions/setup-python@v5
         with:
@@ -49,7 +63,6 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           # 모델 롤백은 이 값만 바꾸면 된다 (예: gpt-4.1-mini)
           OPENAI_MODEL: gpt-5.6-luna
-          SCAN_MODE: market_open
           SCAN_TICKER: ${{ github.event.inputs.ticker || '' }}
           FORCE_ALERT: ${{ github.event.inputs.force_alert || 'false' }}
         run: cd sentinel && python run_scan.py
@@ -58,5 +71,18 @@ jobs:
         run: |
           git config user.name "Sentinel Bot"
           git config user.email "sentinel@bot"
-          git add -f sentinel/storage/sentinel.db || true
-          git diff --cached --quiet || git commit -m "📡 scan $(date -u +%H:%M)" && git push || true
+          git add -f sentinel/storage/sentinel.db
+          if git diff --cached --quiet; then
+            echo "DB 변경 없음"
+            exit 0
+          fi
+          git commit -m "📡 scan $(date -u +%H:%M)"
+          # 스캔 도중 다른 커밋(코드 수정 등)이 들어오면 push가 거부된다.
+          # 예전엔 '|| true'로 삼켜서 그 스캔의 기록(쿨다운 근거)이 조용히 사라졌다.
+          for i in 1 2 3; do
+            if git push; then exit 0; fi
+            echo "push 거부 — rebase 후 재시도 ($i/3)"
+            git pull --rebase
+          done
+          echo "::error::sentinel.db push 실패 — 이번 스캔 기록이 유실됨"
+          exit 1

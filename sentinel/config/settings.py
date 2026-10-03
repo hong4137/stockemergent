@@ -29,6 +29,8 @@ class WatchItem:
     china_exposure: str = "low"
     notes: str = ""
     alert_threshold: float = 5.0
+    # 비교 기준 섹터 ETF (비우면 sector 문자열로 추정 — market_context.sector_etf_for)
+    sector_etf: str = ""
 
 
 def _load_watchlist() -> List[WatchItem]:
@@ -64,6 +66,7 @@ def _load_watchlist() -> List[WatchItem]:
                 china_exposure=entry.get("china_exposure", "low"),
                 notes=entry.get("notes", ""),
                 alert_threshold=entry.get("alert_threshold", 5.0),
+                sector_etf=entry.get("sector_etf", ""),
             ))
 
         if items:
