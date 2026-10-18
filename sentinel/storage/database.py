@@ -46,6 +46,14 @@ ALERTS_COLUMNS = [
     # 알림을 정당화한 움직임(반전 알림이면 반전폭, 시간외면 시간외 변동).
     # change_pct만 저장하면 반전 알림 뒤 같은 반전을 매번 '단계 상승'으로 오인한다.
     ("alert_move", "REAL"),
+    # ── v6: 원인 판정 v4 (증거 층·범위) + 장 마감 후 재판정 ──
+    ("cause_verdict", "TEXT DEFAULT ''"),     # 원인 있음 / 원인 미확인
+    ("cause_layer", "TEXT DEFAULT ''"),       # 공시 / 평가 / 예고 / 기사 / 속보 / 시세
+    ("cause_scope", "TEXT DEFAULT ''"),       # 시장 / 섹터 / 개별
+    ("followup_at", "TEXT DEFAULT ''"),       # 재판정한 시각(UTC). 비어 있으면 아직
+    ("followup_headline", "TEXT DEFAULT ''"),
+    ("followup_detail", "TEXT DEFAULT ''"),
+    ("followup_sent", "INTEGER DEFAULT 0"),   # 원인 업데이트를 실제로 보냈나
 ]
 
 
@@ -143,6 +151,9 @@ def save_alert(
     session: str = "",
     market_context: dict = None,
     alert_move: float = None,
+    cause_verdict: str = "",
+    cause_layer: str = "",
+    cause_scope: str = "",
 ):
     conn = _connect()
     c = conn.cursor()
@@ -152,8 +163,9 @@ def save_alert(
             classification, confidence, reason_candidates,
             playbook_id, playbook_actions, sent_via, change_pct,
             headline, detail, event_type, ai_generated, key_source, model,
-            z_score, session, market_context, alert_move)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            z_score, session, market_context, alert_move,
+            cause_verdict, cause_layer, cause_scope)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             alert_id, ticker, timestamp, trigger_type, psi_total,
             classification, confidence, json.dumps(reason_candidates),
@@ -161,7 +173,31 @@ def save_alert(
             headline, detail, event_type, int(bool(ai_generated)), key_source, model,
             z_score, session, json.dumps(market_context or {}, ensure_ascii=False),
             alert_move,
+            cause_verdict, cause_layer, cause_scope,
         ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_alerts_since(since_utc_iso: str) -> list:
+    """since 이후 알림 (오래된 순). 장 마감 후 재판정 대상을 고를 때 쓴다."""
+    conn = _connect()
+    c = conn.cursor()
+    c.execute("SELECT * FROM alerts WHERE timestamp >= ? ORDER BY timestamp", (since_utc_iso,))
+    rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return rows
+
+
+def save_followup(alert_id: str, headline: str, detail: str, sent: bool):
+    """재판정 결과를 원래 알림 행에 남긴다. 보내지 않았어도 기록해 다시 재판정하지 않게 한다."""
+    conn = _connect()
+    c = conn.cursor()
+    c.execute(
+        "UPDATE alerts SET followup_at = ?, followup_headline = ?, followup_detail = ?, followup_sent = ? "
+        "WHERE alert_id = ?",
+        (datetime.utcnow().isoformat(), headline, detail, int(bool(sent)), alert_id),
     )
     conn.commit()
     conn.close()

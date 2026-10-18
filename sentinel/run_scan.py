@@ -17,13 +17,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config.settings import WATCHLIST, WATCHMAP
 from storage.database import (
-    init_db, save_scan, prune_scan_log, get_news_baseline, claim_once_per_day,
+    init_db, save_scan, prune_scan_log, get_news_baseline, claim_once_per_day, get_alerts_since,
 )
 from collectors.news_collector import collect_all_news, _load_cik_map
 from collectors.price_collector import collect_price_yfinance, check_price_trigger
 from collectors.market_context import build_market_context
 from engines.psi_engine import PreSignalEngine, FlashReasonEngine
-from alerts.alert_system import send_alert
+from alerts.alert_system import send_alert, run_followup
 from alerts.telegram import send_telegram
 
 # WATCHMAP 키는 대문자다. workflow_dispatch로 'mu' 처럼 들어오면 조용히 아무것도
@@ -123,6 +123,23 @@ def scan_single(ticker, price_data, all_news, market_context=None):
     }
 
 
+def run_followups(now, fetched, market_context):
+    """종목마다 오늘 마지막 알림 1건만 재판정한다. 이미 재판정한 종목은 건너뛴다."""
+    midnight_utc = now.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    by_ticker = {}
+    for row in get_alerts_since(midnight_utc.replace(tzinfo=None).isoformat()):
+        by_ticker.setdefault(row["ticker"], []).append(row)
+    for ticker, rows in by_ticker.items():
+        if ticker not in fetched or any(r.get("followup_at") for r in rows):
+            continue
+        price_data, news = fetched[ticker]
+        log(f"🔁 {ticker} 장 마감 후 재판정")
+        try:
+            run_followup(rows[-1], news, price_data, (market_context or {}).get(ticker))
+        except Exception as e:
+            log(f"  ❌ {ticker} 재판정 실패: {type(e).__name__}: {e}")
+
+
 def main():
     started = time.time()
     init_db()
@@ -164,6 +181,11 @@ def main():
     for r in results:
         e = {"normal": "🟢", "watch": "🟡", "alert": "🟠", "critical": "🔴"}.get(r['level'], "❓")
         log(f"  {e} {r['ticker']:6s} PSI {r['psi']:4.1f} → {r['cls']} ({r['news']}건)")
+
+    # 장 마감 후 재판정 — 오늘 알림 나간 종목을 하루치 증거로 다시 판정한다.
+    # 스케줄러가 애프터마켓(~18:00 ET)에도 30분마다 깨우므로 16:30 이후 첫 스캔에서 돈다.
+    if now.weekday() < 5 and (now.hour, now.minute) >= (16, 30) and now.hour < 20:
+        run_followups(now, fetched, market_context)
 
     # 장마감 일일요약 — 하루 1회.
     # 시간 조건만 쓰면 cron 슬롯이 여러 개 걸려 하루 3번씩 나갔다.

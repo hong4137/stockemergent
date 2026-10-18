@@ -4,3 +4,12 @@ __pycache__/
 *.log
 .wrangler/
 node_modules/
+
+# eval/ — 문서·코드·정답지만 커밋한다.
+# 수집 캐시·증거 묶음·시트·판단 결과·조사 조각은 코드로 다시 만들 수 있고 수십 MB라 뺀다.
+eval/**/cache/
+eval/**/bundles*/
+eval/**/sheets*/
+eval/**/runs/
+eval/**/key_parts/
+eval/**/gates*.txt

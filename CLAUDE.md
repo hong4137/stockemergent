@@ -23,9 +23,30 @@ sentinel-scan.yml → cd sentinel && python run_scan.py
        engines/psi_engine          PSI 0~10 + FlashReason 원인 후보
        storage/database.save_scan  스캔 이력 (뉴스 기준선)
        price_collector.check_price_trigger   세션·σ 기준 트리거
-       alerts/alert_system         발송 판정 → AI 요약 → Telegram → DB 저장
+       alerts/alert_system         발송 판정 → 증거 시트 → AI 원인 판정 → Telegram → DB 저장
+         (발송이 확정된 건만) collectors/evidence + engines/evidence_sheet → engines/ai_summarizer
+  4. 16:30~20:00 ET 스캔: 오늘 알림 나간 종목을 하루치 증거로 재판정 → 바뀌었으면 '원인 업데이트'
   → sentinel/storage/sentinel.db 를 봇이 자동 커밋
 ```
+
+## 원인 판정 (v4, 2026-10 도입)
+
+목적은 "움직였을 때 빨리 알고 **이유**를 아는 것". 이유 판정이 이 프로젝트의 핵심이다.
+설계와 검증 근거는 `eval/` (채점규칙·결과_v1~v4, 백테스트 코드). 바꾸면 `eval/`로 다시 잰다.
+
+- **증거 시트**(`engines/evidence_sheet.py`): 숫자로 정할 것(범위 시장/섹터/개별, 급변 시각, 동종업체 선후)은 코드가 정하고,
+  AI는 시트 안에서 원인만 고른다. 층별 증거(`collectors/evidence.py`):
+  공시(SEC, 자사·동종, 8-K 항목) · 평가(증권사 의견·목표가 변경) · 예고(실적·FOMC·옵션 만기) ·
+  기사(Finnhub, 발행 시각) · 속보(Bluesky 속보 계정) · 시세(5분봉).
+- **절차**(`engines/cause_prompt.md`): 자사 의견 변경·공시를 범위 판단보다 먼저 본다 → 시각 대조 → 범위별 원인 →
+  못 찾으면 '원인 미확인'(지어내지 않음). 업종·시장 동반인데 촉발 사건이 없으면 "업종 동반, 촉발 사건 미확인"으로 쓴다.
+  숫자만으로 원인을 단정하지 않는다(market-watcher 연구 #077: 수치 역추적 35%).
+- 검증 결과(새 홀드아웃 45건, 독립 채점): 알림 시점 엄격 43%·관대 77%. 이전 v1은 31%·53%. 장 마감 후 재판정은 49%.
+- **시각 함정 두 가지** — 둘 다 백테스트에서 실측으로 확인했다.
+  - yfinance `upgrades_downgrades` 시각은 표기가 없지만 **UTC**다(장전 보도 시각과 일치).
+  - SEC submissions JSON의 `acceptanceDateTime`은 'Z'가 붙어 있지만 UTC가 아니다. 공시 헤더(동부시각) 대비
+    EDT +8h / EST +10h로 찍힌다 → `evidence._sec_time()`이 보정한다.
+- DB: `cause_verdict`·`cause_layer`·`cause_scope`(판정), `followup_*`(재판정 기록, 알림 1건당 1회).
 
 ## 반드시 알아야 할 것
 
@@ -79,14 +100,14 @@ yfinance 일봉의 마지막 줄은 **정규장 기준**이라 장 마감 후·�
 - `alerts.ai_generated` 컬럼으로 사후 집계도 가능하다.
 
 ### 모델
-`gpt-5.6-luna` ($0.20/$1.20 per 1M). 워크플로의 `OPENAI_MODEL` 환경변수만 바꾸면 롤백된다.
-- GPT-5 계열은 `temperature`를 받지 않고 `max_tokens` 대신 `max_completion_tokens`를 쓴다.
-- `reasoning_effort`를 명시하지 않으면 추론 토큰이 출력 요금으로 과금된다 → `none` 고정.
-- 응답은 `response_format: json_schema` (strict). 파라미터 거부(400 + `error.param`) 시 자동 재시도.
-- 프롬프트는 `build_prompt()`로 분리돼 있어 API 호출 없이 확인할 수 있다.
+`claude-haiku-5-5` (Anthropic SDK, 입력 $0.10/출력 $0.50 per 1M). 워크플로의 `ANTHROPIC_MODEL`로 바꾼다.
+- 알림 1건당 입력 5천~1만 토큰·출력 수백 토큰 → 건당 0.1센트 안팎. 절차 문서(system)는 캐시된다.
+- 응답은 `output_config.format`(json_schema)로 강제한다. `effort`는 `CAUSE_EFFORT`(기본 medium).
+- 시트는 `build_prompt()`로 API 호출 없이 확인할 수 있다.
+- 이전 모델(gpt-5.6-luna, OpenAI)로 돌아가려면 git 이력에서 `engines/ai_summarizer.py`를 되돌린다.
 
 ### 발송 판정이 AI 호출보다 먼저다
-`send_alert()`는 `should_send_alert()`를 통과한 뒤에만 OpenAI를 부른다.
+`send_alert()`는 `should_send_alert()`를 통과한 뒤에만 증거를 모으고 Claude를 부른다.
 
 ### 스케줄러 (scheduler/)
 GitHub의 schedule은 보장되지 않아 실측 평일 정규장 스캔이 하루 2~3회뿐이었다.
@@ -125,7 +146,8 @@ GitHub의 schedule은 보장되지 않아 실측 평일 정규장 스캔이 하�
 
 ## GitHub Secrets
 
-`OPENAI_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `FINNHUB_API_KEY`.
+`ANTHROPIC_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `FINNHUB_API_KEY`.
+(`OPENAI_API_KEY`는 2026-10 이후 쓰지 않는다.)
 (Cloudflare 워커 쪽 비밀값 `GITHUB_TOKEN`은 GitHub Secrets가 아니라 wrangler로 넣는다.)
 
 ## 점검 쿼리

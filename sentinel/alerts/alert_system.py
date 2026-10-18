@@ -400,9 +400,12 @@ def format_telegram_alert(
     msg += "━━━━━━━━━━━━━━━━━━━\n"
 
     if headline:
-        msg += f"📌 *{headline}*\n"
+        msg += f"📌 *{sanitize_title(headline)}*\n"
     if detail_text:
-        msg += f"→ {detail_text}\n"
+        msg += f"→ {sanitize_title(detail_text)}\n"
+    # 근거의 층 — 공시·증권사 의견이면 사실·권위, 기사·속보면 보도, 시세면 업종 동반 추정
+    if ai_ok and ai_summary.get("cause_layer"):
+        msg += f"🧭 근거: {ai_summary['cause_layer']} · 범위: {ai_summary.get('cause_scope', '')}\n"
 
     msg += "\n"
     msg += f"{cls_emoji} {cls_kr} ({confidence:.0%}) | PSI {psi:.1f}\n"
@@ -566,7 +569,71 @@ def send_alert(
         session=(price_data or {}).get("session", ""),
         market_context=market_context,
         alert_move=round(effective_move(price_data), 2) if price_data else None,
+        cause_verdict=ai.get("cause_verdict", ""),
+        cause_layer=ai.get("cause_layer", ""),
+        cause_scope=ai.get("cause_scope", ""),
     )
 
     print(f"  Alert: {alert_id}")
     return True
+
+
+# ── 장 마감 후 재판정 ──
+# 알림 시점에는 원인 기사가 아직 없는 경우가 많다. 하루치 증거가 모인 저녁에 다시 판정해
+# 원인이 새로 확인되거나 더 단단한 근거로 바뀌었을 때만 '원인 업데이트'를 보낸다.
+# 백테스트: 같은 로직을 장 마감 후 정보로 돌리면 엄격 정답률이 알림 시점보다 6~12%p 높았다.
+
+STRONG_LAYERS = {"공시", "평가", "예고"}
+
+
+def should_send_followup(old: Dict, new: Dict) -> bool:
+    if not new or not new.get("ai_generated"):
+        return False
+    if new.get("cause_verdict") != "원인 있음":
+        return False
+    same = (new.get("headline") or "").strip() == (old.get("headline") or "").strip()
+    if not old.get("ai_generated"):
+        return True                                   # 알림 땐 AI 요약이 실패했다
+    if old.get("cause_verdict") == "원인 미확인":
+        return True                                   # 원인을 새로 찾았다
+    if same:
+        return False
+    if (old.get("confidence") or 0) < 0.5 and new.get("confidence", 0) >= 0.65:
+        return True                                   # 막연했던 설명이 확실해졌다
+    if new.get("cause_layer") in STRONG_LAYERS and old.get("cause_layer") not in STRONG_LAYERS:
+        return True                                   # 공시·증권사·일정으로 근거가 단단해졌다
+    return False
+
+
+def format_followup(old: Dict, new: Dict, price_data: Dict = None) -> str:
+    pct = (price_data or {}).get("change_pct")
+    head = f"🔁 *{old['ticker']}* 원인 업데이트" + (f"  (종가 {pct:+.1f}%)" if pct is not None else "")
+    msg = f"{head}\n━━━━━━━━━━━━━━━━━━━\n"
+    msg += f"📌 *{sanitize_title(new['headline'])}*\n→ {sanitize_title(new['detail'])}\n"
+    msg += f"🧭 근거: {new.get('cause_layer', '')} · 범위: {new.get('cause_scope', '')}\n"
+    if old.get("headline"):
+        msg += f"\n(알림 때 설명: {sanitize_title(old['headline'])})\n"
+    if new.get("key_source"):
+        msg += f"🔗 {new['key_source'][:80]}\n"
+    msg += f"\n🕐 {_get_et_now().strftime('%H:%M ET')}"
+    return msg.strip()
+
+
+def run_followup(old: Dict, news_data: List[Dict], price_data: Dict = None,
+                 market_context: Dict = None) -> bool:
+    """알림 1건을 재판정하고, 바뀌었으면 보낸다. 결과는 어느 쪽이든 DB에 남긴다."""
+    from engines.ai_summarizer import summarize_event
+    from storage.database import save_followup
+    new = summarize_event(old["ticker"], news_data, price_data, market_context=market_context,
+                          prev_alert={"headline": old.get("headline"), "change_pct": old.get("change_pct")},
+                          followup=True)
+    send = should_send_followup(old, new)
+    if send:
+        from alerts.telegram import send_telegram
+        msg = format_followup(old, new, price_data)
+        print(msg)
+        send = bool(send_telegram(msg))
+    else:
+        print(f"  ⏭️ {old['ticker']} 재판정 — 설명 변화 없음 ({(new or {}).get('headline', '')})")
+    save_followup(old["alert_id"], (new or {}).get("headline", ""), (new or {}).get("detail", ""), send)
+    return send
