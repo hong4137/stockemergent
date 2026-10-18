@@ -60,9 +60,9 @@ jobs:
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          # 모델 롤백은 이 값만 바꾸면 된다 (예: gpt-4.1-mini)
-          OPENAI_MODEL: gpt-5.6-luna
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # 원인 판정 모델 (engines/ai_summarizer.py). 바꾸면 eval/로 다시 재볼 것
+          ANTHROPIC_MODEL: claude-haiku-5-5
           SCAN_TICKER: ${{ github.event.inputs.ticker || '' }}
           FORCE_ALERT: ${{ github.event.inputs.force_alert || 'false' }}
         run: cd sentinel && python run_scan.py

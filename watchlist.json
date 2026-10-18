@@ -7,8 +7,10 @@
       "sector": "semiconductor",
       "sector_etf": "SOXX",
       "related": [
-        "SAMSUNG",
-        "SK HYNIX"
+        "WDC",
+        "SNDK",
+        "STX",
+        "NVDA"
       ],
       "keywords": [
         "MU",
@@ -211,7 +213,12 @@
       "name": "팔로알토 네트웍스",
       "sector": "보안",
       "sector_etf": "CIBR",
-      "related": [],
+      "related": [
+        "CRWD",
+        "ZS",
+        "FTNT",
+        "NET"
+      ],
       "keywords": [
         "PANW",
         "Palo Alto Networks",
@@ -233,7 +240,6 @@
       "related": [
         "FSLY",
         "AKAM",
-        "NET",
         "DDOG",
         "ZS",
         "PANW"
