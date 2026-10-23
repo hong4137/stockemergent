@@ -165,15 +165,26 @@ def format_context_for_prompt(stock_move: float, ctx: Optional[Dict]) -> str:
 
 
 def format_context_for_alert(stock_move: float, ctx: Optional[Dict]) -> str:
-    """텔레그램 한 줄: 📊 S&P -0.4% · 반도체 +2.7% · 섹터 대비 -8.3%p"""
+    """텔레그램 한 줄: 📊 S&P500 -0.4% · 반도체 업종 +2.7% → 업종보다 8.3%p 더 빠짐"""
     if not ctx:
         return ""
     parts = []
     if ctx.get("spy") is not None:
-        parts.append(f"S&P {ctx['spy']:+.1f}%")
+        parts.append(f"S&P500 {ctx['spy']:+.1f}%")
     if ctx.get("sector") is not None:
-        parts.append(f"{ctx['sector_label']} {ctx['sector']:+.1f}%")
+        label = ctx["sector_label"]
+        if ctx.get("sector_etf") not in ("QQQ", "SPY"):
+            label += " 업종"
+        parts.append(f"{label} {ctx['sector']:+.1f}%")
+    line = "📊 " + " · ".join(parts) if parts else ""
+
     scope = assess_scope(stock_move, ctx)
-    if scope["excess"] is not None:
-        parts.append(f"섹터 대비 {scope['excess']:+.1f}%p")
-    return "📊 " + " · ".join(parts) if parts else ""
+    ex = scope["excess"]
+    if line and ex is not None and stock_move is not None:
+        if abs(ex) < 1.0:
+            line += " → 업종과 비슷하게 움직임"
+        elif stock_move >= 0:
+            line += f" → 업종보다 {abs(ex):.1f}%p {'더' if ex > 0 else '덜'} 오름"
+        else:
+            line += f" → 업종보다 {abs(ex):.1f}%p {'덜' if ex > 0 else '더'} 빠짐"
+    return line

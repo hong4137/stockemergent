@@ -161,15 +161,20 @@ def summarize_event(ticker, news_data, price_data=None, market_context=None, pre
     print(f"  🧮 tokens in:{u.input_tokens} out:{u.output_tokens} "
           f"cache_read:{u.cache_read_input_tokens or 0}")
 
+    # 보조 요인은 괄호 "(보조: …)"로 붙이지 않고 다음 줄의 문장으로 쓴다.
+    # 괄호 속 보고서체가 알림을 'AI끼리 하는 말'처럼 보이게 만들었다.
     if r["verdict"] == "원인 미확인":
-        detail = "원인 미확인 — " + (r["excluded"] or r["cause"])
+        detail = "뚜렷한 원인은 찾지 못했다. " + (r["excluded"] or r["cause"])
     else:
-        detail = r["cause"] + (f" (보조: {r['secondary']})" if r["secondary"] else "")
+        detail = r["cause"]
+        if r["secondary"]:
+            detail += "\n" + r["secondary"]
     result = {
         "headline": r["headline"],
-        "detail": detail,
+        "detail": detail.strip(),
         "classification": r["classification"],
         "confidence": CONFIDENCE.get(r["confidence"], 0.5),
+        "cause_confidence": r["confidence"],
         "event_type": r["event_type"],
         "cause_verdict": r["verdict"],
         "cause_layer": r["layer"],

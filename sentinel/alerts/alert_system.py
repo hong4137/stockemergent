@@ -19,6 +19,7 @@ from storage.database import (
     count_noise_alerts_today,
 )
 from alerts.telegram import sanitize_title
+from alerts.wording import price_header, price_explainer, basis_line, verdict_line, time_line
 
 
 # ── 한글 매핑 ──
@@ -35,108 +36,109 @@ CLS_EMOJI = {
     "Noise": "⚠️",
 }
 
+# 알림 아래에 붙는 '확인해 볼 것'. 전문 용어 없이, 휴대폰에서 바로 읽히게 쓴다.
+# (예전 문구: "섹터 로테이션 / 개별 펀더멘털 변화 없으면 대응 불필요", "10b5-1", "13D/13G")
 PLAYBOOKS = {
     "Catalyst": {
-        "id": "호재 감지",
+        "id": "오르는 중",
         "actions": [
-            "추적 강화: 15분 간격 모니터링",
-            "관련 종목 동향 확인",
+            "이 종목 움직임을 조금 더 지켜보기",
+            "같은 업종 종목들도 함께 오르는지 보기",
         ],
     },
     "Fracture": {
-        "id": "악재 감지",
+        "id": "내리는 중",
         "actions": [
-            "리스크 상향: 포지션 재평가",
-            "손절 체크리스트 확인",
+            "보유 중이라면 비중과 손절 기준 다시 보기",
+            "같은 업종 종목들도 함께 내리는지 보기",
         ],
     },
     "Noise": {
-        "id": "노이즈",
+        "id": "평소 수준의 움직임",
         "actions": [
-            "팩트 근거 재확인",
-            "15분 후 재평가",
+            "근거가 될 소식이 실제로 있는지 다시 보기",
+            "조금 뒤 추세가 이어지는지 확인하기",
         ],
     },
 }
 
-# 이벤트 성격별 체크리스트. 분류(호재/악재)만으로는 "추적 강화" 같은 빈 문구밖에
-# 못 주므로, AI가 판정한 event_type이 있으면 그쪽을 우선 쓴다.
+# 원인의 종류별 체크리스트. AI가 판정한 event_type이 있으면 이쪽을 우선 쓴다.
 EVENT_PLAYBOOKS = {
     "earnings": {
         "id": "실적 발표",
         "actions": [
-            "컨센서스 대비 매출/EPS 확인",
-            "가이던스 방향 확인 — beat했어도 가이던스 하향이면 악재",
+            "시장 예상보다 매출·이익이 좋았는지 보기",
+            "다음 분기 전망을 올렸는지 내렸는지 보기 — 실적이 좋아도 전망을 낮추면 주가는 빠진다",
         ],
     },
     "regulatory": {
         "id": "규제·정책",
         "actions": [
-            "적용 시점과 대상 범위 확인",
-            "동종업체 동반 영향 여부 확인",
+            "언제부터, 어디까지 적용되는지 보기",
+            "같은 업종 다른 회사들도 영향을 받는지 보기",
         ],
     },
     "geopolitical": {
-        "id": "지정학 이슈",
+        "id": "국제 정세",
         "actions": [
-            "개별 종목 이슈 아님 — 섹터 전반 확인",
-            "지수 대비 상대강도로 과매도 여부 판단",
+            "이 회사만의 문제가 아니다 — 업종 전체 흐름 보기",
+            "시장보다 유독 더 빠졌는지 보기",
         ],
     },
     "macro": {
-        "id": "매크로 요인",
+        "id": "시장 전체 흐름",
         "actions": [
-            "개별 종목 이슈 아님 — 금리/환율/지수 확인",
-            "섹터 로테이션인지 개별 악재인지 구분",
+            "이 회사만의 문제가 아니다 — 금리·환율·지수 흐름 보기",
+            "업종 전체가 움직인 건지, 이 종목만 움직인 건지 구분하기",
         ],
     },
     "analyst": {
-        "id": "애널리스트 액션",
+        "id": "증권사 의견 변경",
         "actions": [
-            "목표주가 변경폭과 투자의견 확인",
-            "펀더멘털 변화 없는 단순 리레이팅인지 확인",
+            "목표가를 얼마나 바꿨는지, 매수·매도 의견이 바뀌었는지 보기",
+            "실적 전망이 바뀐 건지, 눈높이만 조정한 건지 보기",
         ],
     },
     "partnership": {
-        "id": "계약·파트너십",
+        "id": "계약·제휴",
         "actions": [
-            "계약 규모와 기간 확인",
-            "매출 반영 시점 확인 — 즉시인지 수년 뒤인지",
+            "계약 규모와 기간 보기",
+            "매출에 언제 반영되는지 보기 — 당장인지 몇 년 뒤인지",
         ],
     },
     "product": {
         "id": "제품·기술",
         "actions": [
-            "출시/양산 일정 확인",
-            "경쟁사 대비 포지션 변화 확인",
+            "출시나 생산이 언제인지 보기",
+            "경쟁사보다 앞서는 내용인지 보기",
         ],
     },
     "insider": {
-        "id": "내부자 거래",
+        "id": "임원 주식 매매",
         "actions": [
-            "10b5-1 사전계획 매도인지 확인 — 대부분 신호 아님",
-            "보유분 대비 매도 비중 확인",
+            "미리 정해 둔 정기 매도인지 보기 — 대부분 큰 의미 없다",
+            "가진 주식 중 얼마나 팔았는지 보기",
         ],
     },
     "institutional": {
-        "id": "기관·행동주의 수급",
+        "id": "큰손 투자자 움직임",
         "actions": [
-            "지분 규모와 13D/13G 구분 확인 — 13D는 경영 개입 의도",
-            "해당 기관의 과거 보유 이력 확인 — 신규 진입인지 추가 매수인지",
+            "얼마나 샀는지, 경영에 목소리를 내겠다는 건지 보기",
+            "처음 사들인 건지, 원래 갖고 있다가 더 산 건지 보기",
         ],
     },
     "controversy": {
-        "id": "여론·평판 이슈",
+        "id": "여론·평판 문제",
         "actions": [
-            "실적에 영향을 주는 사안인지 구분 — 대부분 단기 심리",
-            "규제·소송으로 번질 소지가 있는지 확인",
+            "실적에 실제로 영향을 줄 일인지 보기 — 대부분 단기 심리",
+            "소송이나 규제로 번질 수 있는지 보기",
         ],
     },
     "sector_rotation": {
-        "id": "섹터 로테이션",
+        "id": "업종 전체의 움직임",
         "actions": [
-            "동일 섹터 종목 동반 움직임 확인",
-            "개별 펀더멘털 변화 없으면 대응 불필요",
+            "같은 업종 종목들이 함께 움직였는지 보기",
+            "이 회사만의 소식이 없다면 급하게 대응할 필요는 적다",
         ],
     },
 }
@@ -370,45 +372,32 @@ def format_telegram_alert(
     cls_emoji = CLS_EMOJI.get(cls_type, "?")
     playbook = resolve_playbook(cls_type, event_type)
 
-    # 가격 변동
-    price_line = ""
-    if price_data:
-        pct = price_data.get("change_pct", 0)
-        rev = price_data.get("intraday_reversal", 0)
-        z = price_data.get("z_change")
-        if price_data.get("session") in ("pre", "post") and price_data.get("ext_change_pct") is not None:
-            label = "프리마켓" if price_data["session"] == "pre" else "시간외"
-            price_line = f"{label} {price_data['ext_change_pct']:+.1f}% (정규장 {pct:+.1f}%)"
-        else:
-            if abs(pct) >= 0.5:
-                price_line = f"{pct:+.1f}%"
-                if z is not None:
-                    price_line += f" ({abs(z):.1f}σ)"
-            if abs(rev) >= 3:
-                rev_dir = "고점대비" if rev < 0 else "저점대비"
-                price_line += f" ({rev_dir} {rev:+.1f}%)"
-    else:
-        pf = details.get("price_boost", {}).get("factors", [])
-        if pf:
-            price_line = pf[0].split("->")[0].replace("가격 변동", "").strip()
-
+    # 가격: 헤더엔 숫자 하나, 그 아래 '평소보다 얼마나 큰 움직임인지'를 말로.
+    # (예전 표기 "+6.7% (2.0σ) (저점대비 +7.8%)"는 σ를 아는 사람만 읽을 수 있었다)
     header = f"{cls_emoji} *{ticker}*"
+    price_line = price_header(price_data)
     if price_line:
         header += f"  {price_line}"
 
     msg = f"{header}\n"
+    explainer = price_explainer(price_data)
+    if explainer:
+        msg += f"{explainer}\n"
     msg += "━━━━━━━━━━━━━━━━━━━\n"
 
     if headline:
         msg += f"📌 *{sanitize_title(headline)}*\n"
     if detail_text:
-        msg += f"→ {sanitize_title(detail_text)}\n"
+        msg += f"→ {_indent(sanitize_title(detail_text))}\n"
     # 근거의 층 — 공시·증권사 의견이면 사실·권위, 기사·속보면 보도, 시세면 업종 동반 추정
-    if ai_ok and ai_summary.get("cause_layer"):
-        msg += f"🧭 근거: {ai_summary['cause_layer']} · 범위: {ai_summary.get('cause_scope', '')}\n"
 
     msg += "\n"
-    msg += f"{cls_emoji} {cls_kr} ({confidence:.0%}) | PSI {psi:.1f}\n"
+    # 확신도는 AI 판정의 높음/중간/낮음을 그대로 쓴다. 85% 같은 수치는 가짜 정밀도이고,
+    # PSI는 내부 점수라 알림을 받는 사람에게 의미가 없다(로그·DB에는 남는다).
+    conf_label = (ai_summary or {}).get("cause_confidence", "") if ai_ok else ""
+    msg += verdict_line(cls_emoji, cls_kr, conf_label) + "\n"
+    if ai_ok and ai_summary.get("cause_layer"):
+        msg += basis_line(ai_summary["cause_layer"], ai_summary.get("cause_scope", "")) + "\n"
 
     # 섹터 전체가 움직인 건지, 이 종목만 움직인 건지 한눈에 보이게
     if market_context:
@@ -457,7 +446,7 @@ def format_telegram_alert(
     if shown:
         msg += "\n"
 
-    msg += f"\n📖 *{playbook['id']}*\n"
+    msg += f"\n📖 *{playbook['id']}* — 확인해 볼 것\n"
     for a in playbook["actions"]:
         msg += f"  ▸ {a}\n"
 
@@ -465,11 +454,17 @@ def format_telegram_alert(
     # 표시가 없으면 모델/파라미터 문제로 품질이 떨어져도 몇 주씩 묻힌다.
     if ai_summary and not ai_ok:
         reason = ai_summary.get("fallback_reason", "")
-        msg += f"\n⚠️ AI 요약 실패 — 규칙 기반 문구{f' ({reason})' if reason else ''}\n"
+        # 문구는 바꿔도 되지만 '⚠️ AI 요약 실패' 머리말은 유지한다 (CLAUDE.md, 운영 점검에서 이 문자열을 찾는다)
+        msg += (f"\n⚠️ AI 요약 실패 — 원인 분석이 안 돼 위 설명은 자동 문구입니다"
+                f"{f' ({reason})' if reason else ''}\n")
 
-    now_et = _get_et_now()
-    msg += f"\n🕐 {now_et.strftime('%H:%M ET')}"
+    msg += "\n" + time_line(_get_et_now())
     return msg.strip()
+
+
+def _indent(text: str) -> str:
+    """'→ ' 다음 줄들을 같은 칸에 맞춘다 (보조 요인이 둘째 줄로 온다)"""
+    return "\n   ".join(line.strip() for line in (text or "").splitlines() if line.strip())
 
 
 # ── 발송 ──
@@ -609,13 +604,15 @@ def format_followup(old: Dict, new: Dict, price_data: Dict = None) -> str:
     pct = (price_data or {}).get("change_pct")
     head = f"🔁 *{old['ticker']}* 원인 업데이트" + (f"  (종가 {pct:+.1f}%)" if pct is not None else "")
     msg = f"{head}\n━━━━━━━━━━━━━━━━━━━\n"
-    msg += f"📌 *{sanitize_title(new['headline'])}*\n→ {sanitize_title(new['detail'])}\n"
-    msg += f"🧭 근거: {new.get('cause_layer', '')} · 범위: {new.get('cause_scope', '')}\n"
+    msg += f"📌 *{sanitize_title(new['headline'])}*\n→ {_indent(sanitize_title(new['detail']))}\n"
+    line = basis_line(new.get("cause_layer", ""), new.get("cause_scope", ""))
+    if line:
+        msg += line + (f" · 확신도 {new['cause_confidence']}" if new.get("cause_confidence") else "") + "\n"
     if old.get("headline"):
-        msg += f"\n(알림 때 설명: {sanitize_title(old['headline'])})\n"
+        msg += f"\n낮에 보낸 알림의 설명: {sanitize_title(old['headline'])}\n"
     if new.get("key_source"):
         msg += f"🔗 {new['key_source'][:80]}\n"
-    msg += f"\n🕐 {_get_et_now().strftime('%H:%M ET')}"
+    msg += "\n" + time_line(_get_et_now())
     return msg.strip()
 
 

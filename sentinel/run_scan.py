@@ -120,6 +120,7 @@ def scan_single(ticker, price_data, all_news, market_context=None):
         "level": psi_result['level'],
         "cls": flash_result['classification']['type'] if flash_result else "-",
         "news": len(all_news),
+        "change_pct": (price_data or {}).get("change_pct"),
     }
 
 
@@ -191,13 +192,31 @@ def main():
     # 시간 조건만 쓰면 cron 슬롯이 여러 개 걸려 하루 3번씩 나갔다.
     if now.weekday() < 5 and now.hour == 16 and now.minute < 35:
         if claim_once_per_day("daily_summary", now.strftime("%Y-%m-%d")):
-            msg = f"📊 *Daily Summary* {now.strftime('%m/%d')}\n━━━━━━━━━━━━━━━\n"
-            for r in results:
-                e = {"normal": "🟢", "watch": "🟡", "alert": "🟠", "critical": "🔴"}.get(r['level'], "❓")
-                msg += f"{e} *{r['ticker']}* PSI {r['psi']:.1f} → {r['cls']}\n"
-            send_telegram(msg)
+            send_telegram(format_daily_summary(now, results))
         else:
             log("  ⏭️ 일일요약 이미 발송됨")
+
+
+def format_daily_summary(now, results):
+    """장 마감 요약 — 종목별 오늘 등락과, 알림을 보냈다면 그 이유 한 줄.
+    (예전엔 'PSI 2.7 → Catalyst'처럼 내부 점수만 나열했다)"""
+    from alerts.alert_system import same_day_previous_alert
+    from alerts.telegram import sanitize_title
+
+    msg = f"📊 *오늘 장 마감 요약* {now.month}/{now.day}\n━━━━━━━━━━━━━━━\n"
+    quiet = []
+    for r in sorted(results, key=lambda x: -abs(x.get("change_pct") or 0)):
+        pct = r.get("change_pct")
+        pct_txt = f"{pct:+.1f}%" if pct is not None else "시세 없음"
+        last = same_day_previous_alert(r["ticker"])
+        if last and last.get("headline"):
+            icon = "🟢" if (pct or 0) >= 0 else "🔴"
+            msg += f"{icon} *{r['ticker']}* {pct_txt} — {sanitize_title(last['headline'])}\n"
+        else:
+            quiet.append(f"{r['ticker']} {pct_txt}")
+    if quiet:
+        msg += f"\n특이사항 없음: {', '.join(quiet)}\n"
+    return msg.strip()
 
 
 if __name__ == "__main__":
